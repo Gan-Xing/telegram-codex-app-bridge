@@ -2,6 +2,11 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PLIST="$HOME/Library/LaunchAgents/com.ganxing.telegram-codex-app-bridge.plist"
+NODE_BIN="$(command -v node)"
+if [[ -z "$NODE_BIN" ]]; then
+  echo "node not found in PATH" >&2
+  exit 1
+fi
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -12,8 +17,7 @@ cat > "$PLIST" <<PLIST
   <string>com.ganxing.telegram-codex-app-bridge</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/env</string>
-    <string>node</string>
+    <string>$NODE_BIN</string>
     <string>$ROOT_DIR/dist/main.js</string>
     <string>serve</string>
   </array>
