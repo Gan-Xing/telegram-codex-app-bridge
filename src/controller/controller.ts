@@ -28,7 +28,7 @@ import {
   type StagedTelegramAttachment,
   type TelegramInboundAttachment,
 } from '../telegram/media.js';
-import { chunkTelegramMessage, sanitizeTelegramPreview } from '../telegram/text.js';
+import { chunkTelegramMessage, chunkTelegramStreamMessage } from '../telegram/text.js';
 import { isDefaultTelegramScope, resolveTelegramAddressing } from '../telegram/addressing.js';
 import { parseTelegramScopeId } from '../telegram/scope.js';
 import type { CodexAppClient, JsonRpcNotification, JsonRpcServerRequest, TurnInput } from '../codex_app/client.js';
@@ -44,7 +44,13 @@ interface ActiveTurn {
   buffer: string;
   finalText: string | null;
   interruptRequested: boolean;
-  lastFlushAt: number;
+  statusMessageText: string | null;
+  streamMessages: Array<{ messageId: number; text: string }>;
+  lastStreamFlushAt: number;
+  renderRequested: boolean;
+  forceStatusFlush: boolean;
+  forceStreamFlush: boolean;
+  renderTask: Promise<void> | null;
   resolver: () => void;
 }
 
@@ -95,16 +101,21 @@ export class BridgeController {
     });
     this.app.on('disconnected', () => {
       this.attachedThreads.clear();
+      void this.abandonActiveTurns().catch((error) => {
+        this.logger.error('codex.disconnect_cleanup_failed', { error: toErrorMeta(error) });
+      });
       this.updateStatus();
     });
 
     await this.app.start();
+    await this.cleanupStaleTurnPreviews();
     await this.bot.start();
     this.botUsername = this.bot.username;
     this.updateStatus();
   }
 
   async stop(): Promise<void> {
+    await this.abandonActiveTurns();
     this.bot.stop();
     for (const timer of this.approvalTimers.values()) {
       clearTimeout(timer);
@@ -166,9 +177,14 @@ export class BridgeController {
       : await this.createBinding(scopeId, null);
     await this.sendTyping(scopeId);
     const previewMessageId = await this.sendMessage(scopeId, t(locale, 'working'));
-    const input = await this.buildTurnInput(binding, { ...event, text: decision.text }, locale);
-    const turnState = await this.startTurnWithRecovery(scopeId, binding, input);
-    await this.registerActiveTurn(scopeId, event.chatId, event.topicId, turnState.threadId, turnState.turnId, previewMessageId);
+    try {
+      const input = await this.buildTurnInput(binding, { ...event, text: decision.text }, locale);
+      const turnState = await this.startTurnWithRecovery(scopeId, binding, input);
+      await this.registerActiveTurn(scopeId, event.chatId, event.topicId, turnState.threadId, turnState.turnId, previewMessageId);
+    } catch (error) {
+      await this.cleanupTransientPreview(scopeId, previewMessageId);
+      throw error;
+    }
   }
 
   private async handleCommand(event: TelegramTextEvent, locale: AppLocale, name: string, args: string[]): Promise<void> {
@@ -393,25 +409,34 @@ export class BridgeController {
         this.updateStatus();
         return;
       }
+      case 'codex/event/agent_message_content_delta':
       case 'item/agentMessage/delta': {
-        const { turnId, delta } = notification.params as { turnId: string; delta: string };
+        const turnId = extractTurnId(notification.params);
+        const delta = extractAgentDeltaText(notification.params);
+        if (!turnId || !delta) return;
         const active = this.activeTurns.get(turnId);
         if (!active) return;
         active.buffer += delta;
-        await this.flushPreview(active, false);
+        await this.queueTurnRender(active);
         return;
       }
+      case 'codex/event/item_completed':
       case 'item/completed': {
-        const params = notification.params as any;
-        if (params.item?.type !== 'agentMessage') return;
-        const active = this.activeTurns.get(String(params.turnId));
+        const turnId = extractTurnId(notification.params);
+        if (!turnId) return;
+        const active = this.activeTurns.get(turnId);
         if (!active) return;
-        active.finalText = String(params.item.text || active.buffer || t(this.localeForChat(active.scopeId), 'completed'));
+        const completedText = extractCompletedAgentText(notification.params);
+        if (completedText === null) return;
+        active.finalText = completedText || active.buffer || t(this.localeForChat(active.scopeId), 'completed');
+        await this.queueTurnRender(active, { forceStream: true });
         return;
       }
       case 'turn/completed': {
         const params = notification.params as any;
-        const active = this.activeTurns.get(String(params.turn?.id));
+        const turnId = extractTurnId(params);
+        if (!turnId) return;
+        const active = this.activeTurns.get(turnId);
         if (!active) return;
         try {
           await this.completeTurn(active);
@@ -625,57 +650,44 @@ export class BridgeController {
       buffer: '',
       finalText: null,
       interruptRequested: false,
-      lastFlushAt: 0,
+      statusMessageText: null,
+      streamMessages: [],
+      lastStreamFlushAt: 0,
+      renderRequested: false,
+      forceStatusFlush: false,
+      forceStreamFlush: false,
+      renderTask: null,
       resolver: resolveTurn,
     };
     this.activeTurns.set(turnId, active);
+    this.store.saveActiveTurnPreview({
+      turnId,
+      scopeId,
+      threadId,
+      messageId: previewMessageId,
+    });
     this.updateStatus();
     try {
-      await this.editMessage(
-        scopeId,
-        previewMessageId,
-        this.renderActivePreview(active),
-        activeTurnKeyboard(this.localeForChat(scopeId), turnId),
-      );
+      await this.queueTurnRender(active, { forceStatus: true, forceStream: true });
     } catch (error) {
       this.logger.warn('telegram.preview_keyboard_attach_failed', { error: String(error), turnId });
     }
     await waitForTurn;
   }
 
-  private async flushPreview(active: ActiveTurn, force: boolean): Promise<void> {
-    const now = Date.now();
-    if (!force && now - active.lastFlushAt < this.config.telegramPreviewThrottleMs) return;
-    const text = this.renderActivePreview(active);
-    active.lastFlushAt = now;
-    try {
-      await this.editMessage(
-        active.scopeId,
-        active.previewMessageId,
-        text,
-        active.interruptRequested ? [] : activeTurnKeyboard(this.localeForChat(active.scopeId), active.turnId),
-      );
-    } catch (error) {
-      this.logger.warn('telegram.preview_edit_failed', { error: String(error) });
-    }
-  }
-
   private async completeTurn(active: ActiveTurn): Promise<void> {
     const locale = this.localeForChat(active.scopeId);
-    const finalChunks = chunkTelegramMessage(active.finalText || active.buffer || t(locale, 'completed'));
-    for (const chunk of finalChunks) {
-      await this.sendMessage(active.scopeId, chunk);
-    }
-
     try {
-      await this.deleteMessage(active.scopeId, active.previewMessageId);
-    } catch (error) {
-      this.logger.warn('telegram.preview_delete_failed', { error: String(error) });
-      try {
-        await this.editMessage(active.scopeId, active.previewMessageId, t(locale, 'completed_see_reply_below'), []);
-      } catch (fallbackError) {
-        this.logger.warn('telegram.preview_cleanup_failed', { error: String(fallbackError) });
+      await this.queueTurnRender(active, { forceStatus: true, forceStream: true });
+      if (active.streamMessages.length === 0) {
+        const fallbackKey = active.interruptRequested ? 'interrupted' : 'completed';
+        const finalChunks = chunkTelegramMessage(active.finalText || active.buffer, undefined, t(locale, fallbackKey));
+        for (const chunk of finalChunks) {
+          await this.sendMessage(active.scopeId, chunk);
+        }
       }
+    } finally {
+      await this.cleanupFinishedPreview(active, locale);
     }
   }
 
@@ -1037,6 +1049,7 @@ export class BridgeController {
     const scopeId = event.scopeId;
     const active = this.activeTurns.get(turnId);
     if (!active || active.scopeId !== scopeId) {
+      await this.cleanupStaleInterruptButton(scopeId, event.messageId, locale);
       await this.bot.answerCallback(event.callbackQueryId, t(locale, 'turn_already_finished'));
       return;
     }
@@ -1229,25 +1242,255 @@ export class BridgeController {
     active.interruptRequested = true;
     try {
       await this.app.interruptTurn(active.threadId, active.turnId);
-      await this.editMessage(
-        active.scopeId,
-        active.previewMessageId,
-        this.renderActivePreview(active),
-        [],
-      );
+      await this.queueTurnRender(active, { forceStatus: true });
     } catch (error) {
       active.interruptRequested = false;
       throw error;
     }
   }
 
-  private renderActivePreview(active: ActiveTurn): string {
-    const locale = this.localeForChat(active.scopeId);
-    const content = active.buffer || active.finalText || t(locale, 'working');
-    if (!active.interruptRequested) {
-      return sanitizeTelegramPreview(content);
+  private async queueTurnRender(
+    active: ActiveTurn,
+    options: { forceStatus?: boolean; forceStream?: boolean } = {},
+  ): Promise<void> {
+    active.renderRequested = true;
+    active.forceStatusFlush = active.forceStatusFlush || Boolean(options.forceStatus);
+    active.forceStreamFlush = active.forceStreamFlush || Boolean(options.forceStream);
+    if (active.renderTask) {
+      await active.renderTask;
+      return;
     }
-    return sanitizeTelegramPreview(`${t(locale, 'interrupt_requested_preview')}\n\n${content}`);
+    active.renderTask = (async () => {
+      while (active.renderRequested) {
+        const forceStatus = active.forceStatusFlush;
+        const forceStream = active.forceStreamFlush;
+        active.renderRequested = false;
+        active.forceStatusFlush = false;
+        active.forceStreamFlush = false;
+        await this.syncTurnStream(active, forceStream);
+        await this.syncTurnStatus(active, forceStatus);
+      }
+    })().finally(() => {
+      active.renderTask = null;
+    });
+    await active.renderTask;
+  }
+
+  private async syncTurnStatus(active: ActiveTurn, force: boolean): Promise<void> {
+    const text = this.renderActiveStatus(active);
+    if (!force && text === active.statusMessageText) {
+      return;
+    }
+    try {
+      await this.editMessage(
+        active.scopeId,
+        active.previewMessageId,
+        text,
+        active.interruptRequested ? [] : activeTurnKeyboard(this.localeForChat(active.scopeId), active.turnId),
+      );
+      active.statusMessageText = text;
+    } catch (error) {
+      this.logger.warn('telegram.preview_edit_failed', { error: String(error), turnId: active.turnId });
+    }
+  }
+
+  private async syncTurnStream(active: ActiveTurn, force: boolean): Promise<void> {
+    const now = Date.now();
+    if (!force && now - active.lastStreamFlushAt < this.config.telegramPreviewThrottleMs) {
+      return;
+    }
+
+    const chunks = chunkTelegramStreamMessage(active.finalText ?? active.buffer);
+    if (chunks.length === 0) {
+      if (force) {
+        active.lastStreamFlushAt = now;
+      }
+      return;
+    }
+
+    active.lastStreamFlushAt = now;
+    let index = 0;
+    while (index < chunks.length) {
+      const chunk = chunks[index]!;
+      const existing = active.streamMessages[index];
+      if (!existing) {
+        try {
+          const messageId = await this.sendMessage(active.scopeId, chunk);
+          active.streamMessages.push({ messageId, text: chunk });
+        } catch (error) {
+          this.logger.warn('telegram.stream_send_failed', { error: String(error), turnId: active.turnId, chunkIndex: index });
+          return;
+        }
+        index += 1;
+        continue;
+      }
+      if (existing.text === chunk) {
+        index += 1;
+        continue;
+      }
+      try {
+        await this.editMessage(active.scopeId, existing.messageId, chunk, []);
+        existing.text = chunk;
+        index += 1;
+      } catch (error) {
+        if (isTelegramMessageGone(error)) {
+          active.streamMessages.splice(index);
+          continue;
+        }
+        this.logger.warn('telegram.stream_edit_failed', {
+          error: String(error),
+          turnId: active.turnId,
+          messageId: existing.messageId,
+          chunkIndex: index,
+        });
+        return;
+      }
+    }
+
+    while (active.streamMessages.length > chunks.length) {
+      const stale = active.streamMessages.pop();
+      if (!stale) {
+        break;
+      }
+      try {
+        await this.deleteMessage(active.scopeId, stale.messageId);
+      } catch (error) {
+        if (!isTelegramMessageGone(error)) {
+          this.logger.warn('telegram.stream_delete_failed', {
+            error: String(error),
+            turnId: active.turnId,
+            messageId: stale.messageId,
+          });
+        }
+      }
+    }
+  }
+
+  private async cleanupStaleTurnPreviews(): Promise<void> {
+    for (const preview of this.store.listActiveTurnPreviews()) {
+      await this.retirePreviewMessage(
+        preview.scopeId,
+        preview.messageId,
+        t(this.localeForChat(preview.scopeId), 'stale_preview_expired'),
+        preview.turnId,
+      );
+    }
+  }
+
+  private async cleanupFinishedPreview(
+    active: Pick<ActiveTurn, 'scopeId' | 'previewMessageId' | 'turnId' | 'interruptRequested'>,
+    locale: AppLocale,
+  ): Promise<void> {
+    try {
+      await this.deleteMessage(active.scopeId, active.previewMessageId);
+      this.store.removeActiveTurnPreview(active.turnId);
+      return;
+    } catch (error) {
+      if (isTelegramMessageGone(error)) {
+        this.store.removeActiveTurnPreview(active.turnId);
+        return;
+      }
+      this.logger.warn('telegram.preview_delete_failed', { error: String(error), turnId: active.turnId });
+    }
+
+    await this.retirePreviewMessage(
+      active.scopeId,
+      active.previewMessageId,
+      t(locale, active.interruptRequested ? 'interrupted_see_reply_below' : 'completed_see_reply_below'),
+      active.turnId,
+    );
+  }
+
+  private async cleanupStaleInterruptButton(scopeId: string, messageId: number, locale: AppLocale): Promise<void> {
+    await this.retirePreviewMessage(scopeId, messageId, t(locale, 'stale_preview_expired'));
+  }
+
+  private async cleanupTransientPreview(scopeId: string, messageId: number): Promise<void> {
+    try {
+      await this.deleteMessage(scopeId, messageId);
+    } catch (error) {
+      if (!isTelegramMessageGone(error)) {
+        this.logger.warn('telegram.preview_transient_cleanup_failed', { scopeId, messageId, error: String(error) });
+      }
+    }
+  }
+
+  private async abandonActiveTurns(): Promise<void> {
+    const activeTurns = [...this.activeTurns.values()];
+    for (const active of activeTurns) {
+      await this.retirePreviewMessage(
+        active.scopeId,
+        active.previewMessageId,
+        t(this.localeForChat(active.scopeId), 'stale_preview_expired'),
+        active.turnId,
+      );
+      active.resolver();
+      this.activeTurns.delete(active.turnId);
+    }
+    if (activeTurns.length > 0) {
+      this.updateStatus();
+    }
+  }
+
+  private async retirePreviewMessage(scopeId: string, messageId: number, text: string, turnId?: string): Promise<void> {
+    try {
+      await this.editMessage(scopeId, messageId, text, []);
+      this.forgetPreviewRecord(scopeId, messageId, turnId);
+      return;
+    } catch (error) {
+      if (isTelegramMessageGone(error)) {
+        this.forgetPreviewRecord(scopeId, messageId, turnId);
+        return;
+      }
+      this.logger.warn('telegram.preview_text_cleanup_failed', {
+        scopeId,
+        messageId,
+        turnId: turnId ?? null,
+        error: String(error),
+      });
+    }
+
+    try {
+      await this.clearMessageButtons(scopeId, messageId);
+      this.forgetPreviewRecord(scopeId, messageId, turnId);
+    } catch (error) {
+      if (isTelegramMessageGone(error)) {
+        this.forgetPreviewRecord(scopeId, messageId, turnId);
+        return;
+      }
+      this.logger.warn('telegram.preview_markup_cleanup_failed', {
+        scopeId,
+        messageId,
+        turnId: turnId ?? null,
+        error: String(error),
+      });
+    }
+  }
+
+  private forgetPreviewRecord(scopeId: string, messageId: number, turnId?: string): void {
+    if (turnId) {
+      this.store.removeActiveTurnPreview(turnId);
+      return;
+    }
+    this.store.removeActiveTurnPreviewByMessage(scopeId, messageId);
+  }
+
+  private async clearMessageButtons(scopeId: string, messageId: number): Promise<void> {
+    const target = parseTelegramScopeId(scopeId);
+    await this.bot.clearMessageInlineKeyboard(target.chatId, messageId);
+  }
+
+  private renderActiveStatus(active: ActiveTurn): string {
+    const locale = this.localeForChat(active.scopeId);
+    if (active.interruptRequested) {
+      return active.streamMessages.length > 0
+        ? t(locale, 'interrupt_requested_waiting')
+        : t(locale, 'interrupt_requested_preview');
+    }
+    if (active.streamMessages.length > 0) {
+      return t(locale, 'streaming_reply_below');
+    }
+    return t(locale, 'working');
   }
 }
 
@@ -1324,4 +1567,96 @@ function formatUserError(error: unknown): string {
 
 function isThreadNotFoundError(error: unknown): boolean {
   return error instanceof Error && /(thread not found|no rollout found for thread id)/i.test(error.message);
+}
+
+function isTelegramMessageGone(error: unknown): boolean {
+  const message = formatUserError(error).toLowerCase();
+  return message.includes('message to delete not found')
+    || message.includes('message to edit not found')
+    || message.includes('message not found');
+}
+
+function extractTurnId(params: any): string | null {
+  const candidates = [
+    params?.turnId,
+    params?.turn_id,
+    params?.turn?.id,
+    params?.turn?.turnId,
+    params?.item?.turnId,
+    params?.item?.turn_id,
+  ];
+  for (const candidate of candidates) {
+    if (candidate !== null && candidate !== undefined && String(candidate).trim()) {
+      return String(candidate);
+    }
+  }
+  return null;
+}
+
+function extractAgentDeltaText(params: any): string | null {
+  const candidates = [
+    params?.delta,
+    params?.textDelta,
+    params?.contentDelta,
+    params?.text,
+  ];
+  for (const candidate of candidates) {
+    const text = extractTextCandidate(candidate);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
+function extractCompletedAgentText(params: any): string | null {
+  const itemType = normalizeEventItemType(params?.item ?? params);
+  if (itemType !== 'agentmessage' && itemType !== 'assistantmessage') {
+    return null;
+  }
+  const item = params?.item ?? params;
+  const directText = extractTextCandidate(item?.text)
+    ?? extractTextCandidate(item?.content)
+    ?? extractTextCandidate(item?.value);
+  if (directText !== null) {
+    return directText;
+  }
+  return '';
+}
+
+function normalizeEventItemType(value: any): string | null {
+  const raw = value?.type ?? value?.itemType ?? value?.item_type ?? value?.kind;
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  return raw.replace(/[^a-z]/gi, '').toLowerCase();
+}
+
+function extractTextCandidate(value: any): string | null {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  for (const key of ['text', 'delta', 'content', 'value']) {
+    const candidate = value[key];
+    if (typeof candidate === 'string') {
+      return candidate;
+    }
+  }
+  for (const key of ['parts', 'segments', 'content']) {
+    const candidate = value[key];
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+    const text = candidate
+      .map((entry) => extractTextCandidate(entry))
+      .filter((entry): entry is string => entry !== null)
+      .join('');
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }

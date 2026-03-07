@@ -124,3 +124,40 @@ test('BridgeStore persists chat session settings', () => {
     });
   });
 });
+
+test('BridgeStore persists active turn preview cleanup state', () => {
+  withStore((store) => {
+    store.saveActiveTurnPreview({
+      turnId: 'turn-1',
+      scopeId: 'chat-4::root',
+      threadId: 'thread-1',
+      messageId: 41,
+    });
+
+    let previews = store.listActiveTurnPreviews();
+    assert.equal(previews.length, 1);
+    assert.deepEqual(previews[0], {
+      turnId: 'turn-1',
+      scopeId: 'chat-4::root',
+      threadId: 'thread-1',
+      messageId: 41,
+      createdAt: previews[0]!.createdAt,
+      updatedAt: previews[0]!.updatedAt,
+    });
+
+    store.saveActiveTurnPreview({
+      turnId: 'turn-2',
+      scopeId: 'chat-4::root',
+      threadId: 'thread-2',
+      messageId: 42,
+    });
+
+    previews = store.listActiveTurnPreviews();
+    assert.equal(previews.length, 1);
+    assert.equal(previews[0]?.turnId, 'turn-2');
+    assert.equal(previews[0]?.messageId, 42);
+
+    store.removeActiveTurnPreviewByMessage('chat-4::root', 42);
+    assert.deepEqual(store.listActiveTurnPreviews(), []);
+  });
+});

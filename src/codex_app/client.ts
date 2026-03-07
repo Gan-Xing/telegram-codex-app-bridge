@@ -275,13 +275,10 @@ export class CodexAppClient extends EventEmitter {
       capabilities: {
         experimentalApi: true,
         optOutNotificationMethods: [
-          'codex/event/agent_message_content_delta',
           'codex/event/agent_reasoning_delta',
           'codex/event/reasoning_content_delta',
           'codex/event/reasoning_raw_content_delta',
           'codex/event/exec_command_output_delta',
-          'codex/event/item_started',
-          'codex/event/item_completed',
         ]
       }
     });

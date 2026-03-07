@@ -3,6 +3,15 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import type { AppLocale, CachedThread, ChatSessionSettings, PendingApprovalRecord, ReasoningEffortValue, ThreadBinding } from '../types.js';
 
+export interface ActiveTurnPreviewRecord {
+  turnId: string;
+  scopeId: string;
+  threadId: string;
+  messageId: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export class BridgeStore {
   private db: DatabaseSync;
 
@@ -54,6 +63,14 @@ export class BridgeStore {
         message_id INTEGER,
         created_at INTEGER NOT NULL,
         resolved_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS active_turn_previews (
+        turn_id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,6 +256,39 @@ export class BridgeStore {
   countPendingApprovals(): number {
     const row = this.db.prepare('SELECT COUNT(*) AS count FROM pending_approvals WHERE resolved_at IS NULL').get() as { count: number };
     return Number(row.count);
+  }
+
+  saveActiveTurnPreview(record: Pick<ActiveTurnPreviewRecord, 'turnId' | 'scopeId' | 'threadId' | 'messageId'>): void {
+    const now = Date.now();
+    this.db.prepare('DELETE FROM active_turn_previews WHERE turn_id = ? OR scope_id = ?').run(record.turnId, record.scopeId);
+    this.db.prepare(`
+      INSERT INTO active_turn_previews (turn_id, scope_id, thread_id, message_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(record.turnId, record.scopeId, record.threadId, record.messageId, now, now);
+  }
+
+  listActiveTurnPreviews(): ActiveTurnPreviewRecord[] {
+    const rows = this.db.prepare(`
+      SELECT turn_id, scope_id, thread_id, message_id, created_at, updated_at
+      FROM active_turn_previews
+      ORDER BY created_at ASC
+    `).all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      turnId: String(row.turn_id),
+      scopeId: String(row.scope_id),
+      threadId: String(row.thread_id),
+      messageId: Number(row.message_id),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    }));
+  }
+
+  removeActiveTurnPreview(turnId: string): void {
+    this.db.prepare('DELETE FROM active_turn_previews WHERE turn_id = ?').run(turnId);
+  }
+
+  removeActiveTurnPreviewByMessage(scopeId: string, messageId: number): void {
+    this.db.prepare('DELETE FROM active_turn_previews WHERE scope_id = ? AND message_id = ?').run(scopeId, messageId);
   }
 
   insertAudit(direction: 'inbound' | 'outbound', chatId: string, eventType: string, summary: string): void {

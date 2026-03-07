@@ -150,6 +150,17 @@ export class TelegramGateway extends EventEmitter {
     return this.editMessageWithOptions(chatId, messageId, text, inlineKeyboard, 'HTML');
   }
 
+  async clearMessageInlineKeyboard(chatId: string, messageId: number): Promise<void> {
+    const result = await callTelegramApi(this.botToken, 'editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: { inline_keyboard: [] },
+    });
+    if (!result.ok && !String(result.description || '').includes('message is not modified')) {
+      throw new Error(result.description || 'Failed to clear Telegram message reply markup');
+    }
+  }
+
   private async sendMessageWithOptions(
     chatId: string,
     text: string,
