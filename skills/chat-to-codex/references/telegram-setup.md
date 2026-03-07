@@ -17,6 +17,7 @@ Behavior:
 - No `TG_ALLOWED_CHAT_ID`: private-chat mode
 - `TG_ALLOWED_CHAT_ID` only: the whole group becomes the default scope
 - `TG_ALLOWED_CHAT_ID` + `TG_ALLOWED_TOPIC_ID`: that topic becomes the default scope
+- Private chat with `TG_ALLOWED_USER_ID` still works in every mode above
 
 If multiple bots share one group, keep the same `TG_ALLOWED_CHAT_ID` and give each bot a different `TG_ALLOWED_TOPIC_ID`.
 

@@ -122,3 +122,26 @@ test('TelegramGateway emits topic messages for the configured group chat', async
   assert.equal(events[0]?.replyToBot, true);
   assert.deepEqual(events[0]?.entities, [{ type: 'mention', offset: 0, length: 5 }]);
 });
+
+test('TelegramGateway still emits private chat messages when a group chat is configured', async () => {
+  const gateway = new TelegramGateway('token', '42', '-100123', 1000, storeStub as any, loggerStub as any);
+  const events: TelegramTextEvent[] = [];
+  gateway.on('text', (event: TelegramTextEvent) => {
+    events.push(event);
+  });
+
+  await (gateway as any).handleUpdate({
+    update_id: 4,
+    message: {
+      message_id: 13,
+      chat: { id: 99, type: 'private' },
+      from: { id: 42 },
+      text: '/help',
+    },
+  });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.scopeId, '99::root');
+  assert.equal(events[0]?.chatType, 'private');
+  assert.equal(events[0]?.topicId, null);
+});

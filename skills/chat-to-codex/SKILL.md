@@ -28,6 +28,11 @@ Defaults:
 - repo ref: `main`
 - install directory: `~/telegram-codex-app-bridge`
 
+Telegram behavior:
+
+- private chat with `TG_ALLOWED_USER_ID` remains available even when `TG_ALLOWED_CHAT_ID` or `TG_ALLOWED_TOPIC_ID` is set
+- `TG_ALLOWED_CHAT_ID` and `TG_ALLOWED_TOPIC_ID` choose the default group or topic scope; they do not disable private chat
+
 ## Deployment Rules
 
 1. If the user is deploying to a second Mac, prefer one bot per device.
@@ -79,6 +84,7 @@ After either bootstrap path:
    - `privacy mode` is disabled
    - the bot is an admin in the group
    - the configured `TG_ALLOWED_CHAT_ID` and `TG_ALLOWED_TOPIC_ID` match the target group/topic
+4. If group or topic mode is enabled, also verify that private chat still responds for the configured `TG_ALLOWED_USER_ID`.
 
 ## Resources
 

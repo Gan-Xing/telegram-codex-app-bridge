@@ -324,10 +324,13 @@ export class TelegramGateway extends EventEmitter {
   }
 
   private isAllowedChat(chat: TelegramChat): boolean {
+    if (chat.type === 'private') {
+      return true;
+    }
     if (this.allowedChatId) {
       return String(chat.id) === this.allowedChatId;
     }
-    return chat.type === 'private';
+    return false;
   }
 }
 
