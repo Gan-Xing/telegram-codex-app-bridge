@@ -1,10 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildAccessSettingsKeyboard,
   buildModelSettingsKeyboard,
   buildThreadsKeyboard,
   clampEffortToModel,
+  formatAccessSettingsMessage,
+  formatAccessPresetLabel,
+  formatApprovalPolicyLabel,
   formatModelSettingsMessage,
+  formatSandboxModeLabel,
   formatThreadsMessage,
   normalizeRequestedEffort,
   resolveRequestedModel,
@@ -85,6 +90,7 @@ test('formatModelSettingsMessage renders current selections', () => {
     model: 'o3',
     reasoningEffort: 'high',
     locale: 'en',
+    accessPreset: null,
     updatedAt: Date.now(),
   };
 
@@ -121,6 +127,7 @@ test('buildModelSettingsKeyboard marks selected model and effort', () => {
     model: 'o3',
     reasoningEffort: 'high',
     locale: 'en',
+    accessPreset: null,
     updatedAt: Date.now(),
   };
 
@@ -179,6 +186,32 @@ test('normalizeRequestedEffort validates allowed effort names', () => {
   assert.equal(normalizeRequestedEffort('invalid'), null);
 });
 
+test('access presentation renders current preset and marks selected option', () => {
+  const access = {
+    preset: 'full-access' as const,
+    approvalPolicy: 'never' as const,
+    sandboxMode: 'danger-full-access' as const,
+  };
+
+  const rendered = formatAccessSettingsMessage('en', access);
+  assert.match(rendered, /<b>Access settings<\/b>/);
+  assert.match(rendered, /Preset: <b>Full access<\/b>/);
+  assert.match(rendered, /Approval policy: <b>Never ask<\/b>/);
+  assert.match(rendered, /Sandbox: <b>Danger full access<\/b>/);
+
+  assert.deepEqual(buildAccessSettingsKeyboard('en', access), [[
+    { text: 'Read-only', callback_data: 'settings:access:read-only' },
+    { text: 'Default', callback_data: 'settings:access:default' },
+    { text: '• Full access', callback_data: 'settings:access:full-access' },
+  ]]);
+});
+
+test('access labels render in chinese locale', () => {
+  assert.equal(formatAccessPresetLabel('zh', 'read-only'), '只读');
+  assert.equal(formatApprovalPolicyLabel('zh', 'on-request'), '按需询问');
+  assert.equal(formatSandboxModeLabel('zh', 'workspace-write'), '工作区可写');
+});
+
 test('presentation renders chinese locale strings', () => {
   const threads: AppThread[] = [
     {
@@ -212,6 +245,7 @@ test('presentation renders chinese locale strings', () => {
     model: null,
     reasoningEffort: null,
     locale: 'zh',
+    accessPreset: null,
     updatedAt: Date.now(),
   };
   const renderedModels = formatModelSettingsMessage('zh', models, settings);

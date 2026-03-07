@@ -5,13 +5,27 @@ import type { AppConfig } from '../config.js';
 import { normalizeLocale, t } from '../i18n.js';
 import type { Logger } from '../logger.js';
 import type { BridgeStore } from '../store/database.js';
-import type { AppLocale, ModelInfo, PendingApprovalRecord, ReasoningEffortValue, RuntimeStatus, ThreadBinding, ThreadSessionState } from '../types.js';
+import type {
+  AccessPresetValue,
+  AppLocale,
+  ModelInfo,
+  PendingApprovalRecord,
+  ReasoningEffortValue,
+  RuntimeStatus,
+  ThreadBinding,
+  ThreadSessionState,
+} from '../types.js';
 import { parseCommand } from './commands.js';
 import {
+  buildAccessSettingsKeyboard,
   buildModelSettingsKeyboard,
   buildThreadsKeyboard,
   clampEffortToModel,
+  formatAccessPresetLabel,
+  formatAccessSettingsMessage,
+  formatApprovalPolicyLabel,
   formatModelSettingsMessage,
+  formatSandboxModeLabel,
   formatThreadsMessage,
   formatWhereMessage,
   normalizeRequestedEffort,
@@ -39,6 +53,7 @@ import {
   type TurnActivityEvent,
   type TurnOutputKind,
 } from './activity.js';
+import { normalizeAccessPreset, resolveAccessMode } from './access.js';
 import { renderActiveTurnStatus } from './status.js';
 import { writeRuntimeStatus } from '../runtime.js';
 
@@ -260,6 +275,7 @@ export class BridgeController {
           '/open <n>',
           '/new [cwd]',
           '/models',
+          '/permissions',
           '/reveal',
           '/where',
           '/interrupt',
@@ -271,12 +287,16 @@ export class BridgeController {
       case 'status': {
         const binding = this.store.getBinding(scopeId);
         const settings = this.store.getChatSettings(scopeId);
+        const access = this.resolveEffectiveAccess(scopeId, settings);
         const lines = [
           t(locale, 'status_connected', { value: t(locale, this.app.isConnected() ? 'yes' : 'no') }),
           t(locale, 'status_user_agent', { value: this.app.getUserAgent() ?? t(locale, 'unknown') }),
           t(locale, 'status_current_thread', { value: binding?.threadId ?? t(locale, 'none') }),
           t(locale, 'status_configured_model', { value: settings?.model ?? t(locale, 'server_default') }),
           t(locale, 'status_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }),
+          t(locale, 'status_access_preset', { value: formatAccessPresetLabel(locale, access.preset) }),
+          t(locale, 'status_approval_policy', { value: formatApprovalPolicyLabel(locale, access.approvalPolicy) }),
+          t(locale, 'status_sandbox_mode', { value: formatSandboxModeLabel(locale, access.sandboxMode) }),
           t(locale, 'status_sync_on_open', { value: t(locale, this.config.codexAppSyncOnOpen ? 'yes' : 'no') }),
           t(locale, 'status_sync_on_turn_complete', { value: t(locale, this.config.codexAppSyncOnTurnComplete ? 'yes' : 'no') }),
           t(locale, 'status_pending_approvals', { value: this.store.countPendingApprovals() }),
@@ -350,6 +370,11 @@ export class BridgeController {
         await this.showModelSettingsPanel(scopeId, undefined, locale);
         return;
       }
+      case 'permissions':
+      case 'access': {
+        await this.showAccessSettingsPanel(scopeId, undefined, locale);
+        return;
+      }
       case 'effort': {
         await this.handleEffortCommand(event, locale, args);
         return;
@@ -399,14 +424,14 @@ export class BridgeController {
       await this.handleThreadOpenCallback(event, threadMatch[1]!, locale);
       return;
     }
-    const navMatch = /^nav:(models|threads|reveal)$/.exec(event.data);
+    const navMatch = /^nav:(models|threads|reveal|permissions)$/.exec(event.data);
     if (navMatch) {
-      await this.handleNavigationCallback(event, navMatch[1]! as 'models' | 'threads' | 'reveal', locale);
+      await this.handleNavigationCallback(event, navMatch[1]! as 'models' | 'threads' | 'reveal' | 'permissions', locale);
       return;
     }
-    const settingsMatch = /^settings:(model|effort):(.+)$/.exec(event.data);
+    const settingsMatch = /^settings:(model|effort|access):(.+)$/.exec(event.data);
     if (settingsMatch) {
-      await this.handleSettingsCallback(event, settingsMatch[1]! as 'model' | 'effort', settingsMatch[2]!, locale);
+      await this.handleSettingsCallback(event, settingsMatch[1]! as 'model' | 'effort' | 'access', settingsMatch[2]!, locale);
       return;
     }
     const match = /^approval:([a-f0-9]+):(accept|session|deny)$/.exec(event.data);
@@ -529,9 +554,11 @@ export class BridgeController {
   private async createBinding(scopeId: string, requestedCwd: string | null): Promise<ThreadBinding> {
     const cwd = requestedCwd || this.config.defaultCwd;
     const settings = this.store.getChatSettings(scopeId);
+    const access = this.resolveEffectiveAccess(scopeId, settings);
     const session = await this.app.startThread({
       cwd,
-      approvalPolicy: this.config.defaultApprovalPolicy,
+      approvalPolicy: access.approvalPolicy,
+      sandboxMode: access.sandboxMode,
       model: settings?.model ?? null,
     });
     return this.storeThreadSession(scopeId, session, 'seed');
@@ -539,11 +566,13 @@ export class BridgeController {
 
   private async startTurnWithRecovery(scopeId: string, binding: Pick<ThreadBinding, 'threadId' | 'cwd'>, input: TurnInput[]): Promise<{ threadId: string; turnId: string }> {
     const settings = this.store.getChatSettings(scopeId);
+    const access = this.resolveEffectiveAccess(scopeId, settings);
     try {
       const turn = await this.app.startTurn({
         threadId: binding.threadId,
         input,
-        approvalPolicy: this.config.defaultApprovalPolicy,
+        approvalPolicy: access.approvalPolicy,
+        sandboxMode: access.sandboxMode,
         cwd: binding.cwd ?? this.config.defaultCwd,
         model: settings?.model ?? null,
         effort: settings?.reasoningEffort ?? null,
@@ -557,10 +586,12 @@ export class BridgeController {
       const replacement = await this.createBinding(scopeId, binding.cwd ?? this.config.defaultCwd);
       await this.sendMessage(scopeId, t(this.localeForChat(scopeId), 'current_thread_unavailable_continued', { threadId: replacement.threadId }));
       const nextSettings = this.store.getChatSettings(scopeId);
+      const nextAccess = this.resolveEffectiveAccess(scopeId, nextSettings);
       const turn = await this.app.startTurn({
         threadId: replacement.threadId,
         input,
-        approvalPolicy: this.config.defaultApprovalPolicy,
+        approvalPolicy: nextAccess.approvalPolicy,
+        sandboxMode: nextAccess.sandboxMode,
         cwd: replacement.cwd ?? this.config.defaultCwd,
         model: nextSettings?.model ?? null,
         effort: nextSettings?.reasoningEffort ?? null,
@@ -1018,6 +1049,10 @@ export class BridgeController {
     return normalized;
   }
 
+  private resolveEffectiveAccess(scopeId: string, settings = this.store.getChatSettings(scopeId)) {
+    return resolveAccessMode(this.config, settings);
+  }
+
   private localeForChat(scopeId: string, languageCode?: string | null): AppLocale {
     if (languageCode) {
       const locale = normalizeLocale(languageCode);
@@ -1188,13 +1223,18 @@ export class BridgeController {
 
   private async handleNavigationCallback(
     event: TelegramCallbackEvent,
-    target: 'models' | 'threads' | 'reveal',
+    target: 'models' | 'threads' | 'reveal' | 'permissions',
     locale: AppLocale,
   ): Promise<void> {
     const scopeId = event.scopeId;
     if (target === 'models') {
       await this.showModelSettingsPanel(scopeId, event.messageId, locale);
       await this.bot.answerCallback(event.callbackQueryId, t(locale, 'opened_model_settings'));
+      return;
+    }
+    if (target === 'permissions') {
+      await this.showAccessSettingsPanel(scopeId, event.messageId, locale);
+      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'opened_access_settings'));
       return;
     }
     if (target === 'threads') {
@@ -1216,11 +1256,15 @@ export class BridgeController {
   private async showWherePanel(scopeId: string, messageId?: number, locale = this.localeForChat(scopeId)): Promise<void> {
     const binding = this.store.getBinding(scopeId);
     const settings = this.store.getChatSettings(scopeId);
+    const access = this.resolveEffectiveAccess(scopeId, settings);
     if (!binding) {
       const text = [
         t(locale, 'where_no_thread_bound'),
         t(locale, 'where_configured_model', { value: settings?.model ?? t(locale, 'server_default') }),
         t(locale, 'where_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }),
+        t(locale, 'where_access_preset', { value: formatAccessPresetLabel(locale, access.preset) }),
+        t(locale, 'where_approval_policy', { value: formatApprovalPolicyLabel(locale, access.approvalPolicy) }),
+        t(locale, 'where_sandbox_mode', { value: formatSandboxModeLabel(locale, access.sandboxMode) }),
         t(locale, 'where_send_message_or_new'),
       ].join('\n');
       if (messageId !== undefined) {
@@ -1243,7 +1287,7 @@ export class BridgeController {
       return;
     }
 
-    const text = formatWhereMessage(locale, thread, this.store.getChatSettings(scopeId), this.config.defaultCwd);
+    const text = formatWhereMessage(locale, thread, settings, this.config.defaultCwd, access);
     if (messageId !== undefined) {
       await this.editMessage(scopeId, messageId, text, whereKeyboard(locale, true));
       return;
@@ -1288,15 +1332,31 @@ export class BridgeController {
     await this.sendHtmlMessage(scopeId, text, keyboard);
   }
 
+  private async showAccessSettingsPanel(scopeId: string, messageId?: number, locale = this.localeForChat(scopeId)): Promise<void> {
+    const access = this.resolveEffectiveAccess(scopeId);
+    const text = formatAccessSettingsMessage(locale, access);
+    const keyboard = buildAccessSettingsKeyboard(locale, access);
+    if (messageId !== undefined) {
+      await this.editHtmlMessage(scopeId, messageId, text, keyboard);
+      return;
+    }
+    await this.sendHtmlMessage(scopeId, text, keyboard);
+  }
+
   private async handleSettingsCallback(
     event: TelegramCallbackEvent,
-    kind: 'model' | 'effort',
+    kind: 'model' | 'effort' | 'access',
     rawValue: string,
     locale: AppLocale,
   ): Promise<void> {
     const scopeId = event.scopeId;
-    if (this.findActiveTurn(scopeId)) {
+    if (kind !== 'access' && this.findActiveTurn(scopeId)) {
       await this.bot.answerCallback(event.callbackQueryId, t(locale, 'wait_current_turn'));
+      return;
+    }
+
+    if (kind === 'access') {
+      await this.handleAccessSettingsCallback(event, rawValue, locale);
       return;
     }
 
@@ -1347,6 +1407,20 @@ export class BridgeController {
     await this.bot.answerCallback(event.callbackQueryId, t(locale, 'callback_effort', { effort }));
   }
 
+  private async handleAccessSettingsCallback(event: TelegramCallbackEvent, rawValue: string, locale: AppLocale): Promise<void> {
+    const scopeId = event.scopeId;
+    const nextPreset = normalizeAccessPreset(rawValue);
+    if (!nextPreset) {
+      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
+      return;
+    }
+    this.store.setChatAccessPreset(scopeId, nextPreset);
+    await this.refreshAccessSettingsPanel(scopeId, event.messageId, locale);
+    await this.bot.answerCallback(event.callbackQueryId, t(locale, 'callback_access', {
+      value: formatAccessPresetLabel(locale, nextPreset),
+    }));
+  }
+
   private async refreshModelSettingsPanel(scopeId: string, messageId: number, locale: AppLocale, models?: ModelInfo[]): Promise<void> {
     const resolvedModels = models ?? await this.app.listModels();
     const settings = this.store.getChatSettings(scopeId);
@@ -1355,6 +1429,16 @@ export class BridgeController {
       messageId,
       formatModelSettingsMessage(locale, resolvedModels, settings),
       buildModelSettingsKeyboard(locale, resolvedModels, settings),
+    );
+  }
+
+  private async refreshAccessSettingsPanel(scopeId: string, messageId: number, locale: AppLocale): Promise<void> {
+    const access = this.resolveEffectiveAccess(scopeId);
+    await this.editHtmlMessage(
+      scopeId,
+      messageId,
+      formatAccessSettingsMessage(locale, access),
+      buildAccessSettingsKeyboard(locale, access),
     );
   }
 
@@ -2180,14 +2264,17 @@ function activeTurnKeyboard(locale: AppLocale, turnId: string): Array<Array<{ te
 }
 
 function whereKeyboard(locale: AppLocale, hasBinding: boolean): Array<Array<{ text: string; callback_data: string }>> {
-  const firstRow = [{ text: t(locale, 'button_models'), callback_data: 'nav:models' }];
+  const firstRow = [
+    { text: t(locale, 'button_permissions'), callback_data: 'nav:permissions' },
+    { text: t(locale, 'button_models'), callback_data: 'nav:models' },
+  ];
   const secondRow = [{ text: t(locale, 'button_threads'), callback_data: 'nav:threads' }];
   if (!hasBinding) {
     return [firstRow, secondRow];
   }
   return [
-    [{ text: t(locale, 'button_reveal'), callback_data: 'nav:reveal' }, ...firstRow],
-    secondRow,
+    [{ text: t(locale, 'button_reveal'), callback_data: 'nav:reveal' }, { text: t(locale, 'button_permissions'), callback_data: 'nav:permissions' }],
+    [{ text: t(locale, 'button_models'), callback_data: 'nav:models' }, { text: t(locale, 'button_threads'), callback_data: 'nav:threads' }],
   ];
 }
 

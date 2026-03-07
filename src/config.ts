@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import dotenv from 'dotenv';
 import type { LogLevel } from './logger.js';
+import type { ApprovalPolicyValue, SandboxModeValue } from './types.js';
 
 export const APP_HOME = path.join(os.homedir(), '.telegram-codex-app-bridge');
 export const DEFAULT_STORE_PATH = path.join(APP_HOME, 'data', 'bridge.sqlite');
@@ -24,7 +25,8 @@ export interface AppConfig {
   storePath: string;
   logLevel: LogLevel;
   defaultCwd: string;
-  defaultApprovalPolicy: 'on-request' | 'on-failure' | 'never' | 'untrusted';
+  defaultApprovalPolicy: ApprovalPolicyValue;
+  defaultSandboxMode: SandboxModeValue;
   telegramPollIntervalMs: number;
   telegramPreviewThrottleMs: number;
   threadListLimit: number;
@@ -49,6 +51,7 @@ export function loadConfig(): AppConfig {
     logLevel: parseLogLevel(process.env.LOG_LEVEL || 'info'),
     defaultCwd: process.env.DEFAULT_CWD || process.cwd(),
     defaultApprovalPolicy: parseApprovalPolicy(process.env.DEFAULT_APPROVAL_POLICY || 'on-request'),
+    defaultSandboxMode: parseSandboxMode(process.env.DEFAULT_SANDBOX_MODE || 'workspace-write'),
     telegramPollIntervalMs: intEnv('TELEGRAM_POLL_INTERVAL_MS', 1200),
     telegramPreviewThrottleMs: intEnv('TELEGRAM_PREVIEW_THROTTLE_MS', 800),
     threadListLimit: intEnv('THREAD_LIST_LIMIT', 10),
@@ -114,6 +117,11 @@ function parseLogLevel(value: string): LogLevel {
 function parseApprovalPolicy(value: string): AppConfig['defaultApprovalPolicy'] {
   if (value === 'on-failure' || value === 'never' || value === 'untrusted' || value === 'on-request') return value;
   return 'on-request';
+}
+
+function parseSandboxMode(value: string): AppConfig['defaultSandboxMode'] {
+  if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
+  return 'workspace-write';
 }
 
 function resolveCommand(commandName: string): string | null {

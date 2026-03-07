@@ -102,6 +102,7 @@ test('BridgeStore persists chat session settings', () => {
       model: 'o3',
       reasoningEffort: 'high',
       locale: null,
+      accessPreset: null,
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
@@ -111,6 +112,7 @@ test('BridgeStore persists chat session settings', () => {
       model: null,
       reasoningEffort: 'medium',
       locale: null,
+      accessPreset: null,
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
@@ -120,6 +122,27 @@ test('BridgeStore persists chat session settings', () => {
       model: null,
       reasoningEffort: 'medium',
       locale: 'zh',
+      accessPreset: null,
+      updatedAt: store.getChatSettings('chat-3')!.updatedAt,
+    });
+
+    store.setChatAccessPreset('chat-3', 'full-access');
+    assert.deepEqual(store.getChatSettings('chat-3'), {
+      chatId: 'chat-3',
+      model: null,
+      reasoningEffort: 'medium',
+      locale: 'zh',
+      accessPreset: 'full-access',
+      updatedAt: store.getChatSettings('chat-3')!.updatedAt,
+    });
+
+    store.setChatSettings('chat-3', 'o3', 'low');
+    assert.deepEqual(store.getChatSettings('chat-3'), {
+      chatId: 'chat-3',
+      model: 'o3',
+      reasoningEffort: 'low',
+      locale: 'zh',
+      accessPreset: 'full-access',
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
   });

@@ -1,7 +1,15 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import type { AppLocale, CachedThread, ChatSessionSettings, PendingApprovalRecord, ReasoningEffortValue, ThreadBinding } from '../types.js';
+import type {
+  AccessPresetValue,
+  AppLocale,
+  CachedThread,
+  ChatSessionSettings,
+  PendingApprovalRecord,
+  ReasoningEffortValue,
+  ThreadBinding,
+} from '../types.js';
 
 export interface ActiveTurnPreviewRecord {
   turnId: string;
@@ -34,6 +42,7 @@ export class BridgeStore {
         model TEXT,
         reasoning_effort TEXT,
         locale TEXT,
+        access_preset TEXT,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS thread_cache (
@@ -85,6 +94,7 @@ export class BridgeStore {
     this.ensureColumn('thread_cache', 'model_provider', 'TEXT');
     this.ensureColumn('thread_cache', 'status', "TEXT NOT NULL DEFAULT 'idle'");
     this.ensureColumn('chat_settings', 'locale', 'TEXT');
+    this.ensureColumn('chat_settings', 'access_preset', 'TEXT');
   }
 
   getTelegramOffset(botKey: string): number {
@@ -120,13 +130,14 @@ export class BridgeStore {
   }
 
   getChatSettings(chatId: string): ChatSessionSettings | null {
-    const row = this.db.prepare('SELECT chat_id, model, reasoning_effort, locale, updated_at FROM chat_settings WHERE chat_id = ?').get(chatId) as Record<string, unknown> | undefined;
+    const row = this.db.prepare('SELECT chat_id, model, reasoning_effort, locale, access_preset, updated_at FROM chat_settings WHERE chat_id = ?').get(chatId) as Record<string, unknown> | undefined;
     if (!row) return null;
     return {
       chatId: String(row.chat_id),
       model: row.model === null ? null : String(row.model),
       reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as ReasoningEffortValue,
       locale: row.locale === null ? null : String(row.locale) as AppLocale,
+      accessPreset: row.access_preset === null ? null : String(row.access_preset) as AccessPresetValue,
       updatedAt: Number(row.updated_at),
     };
   }
@@ -134,16 +145,23 @@ export class BridgeStore {
   setChatSettings(chatId: string, model: string | null, reasoningEffort: ReasoningEffortValue | null, locale?: AppLocale | null): void {
     const current = this.getChatSettings(chatId);
     const nextLocale = locale === undefined ? current?.locale ?? null : locale;
-    this.db.prepare(`
-      INSERT INTO chat_settings (chat_id, model, reasoning_effort, locale, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(chat_id) DO UPDATE SET model = excluded.model, reasoning_effort = excluded.reasoning_effort, locale = excluded.locale, updated_at = excluded.updated_at
-    `).run(chatId, model, reasoningEffort, nextLocale, Date.now());
+    this.writeChatSettings(chatId, model, reasoningEffort, nextLocale, current?.accessPreset ?? null);
   }
 
   setChatLocale(chatId: string, locale: AppLocale): void {
     const current = this.getChatSettings(chatId);
-    this.setChatSettings(chatId, current?.model ?? null, current?.reasoningEffort ?? null, locale);
+    this.writeChatSettings(chatId, current?.model ?? null, current?.reasoningEffort ?? null, locale, current?.accessPreset ?? null);
+  }
+
+  setChatAccessPreset(chatId: string, accessPreset: AccessPresetValue | null): void {
+    const current = this.getChatSettings(chatId);
+    this.writeChatSettings(
+      chatId,
+      current?.model ?? null,
+      current?.reasoningEffort ?? null,
+      current?.locale ?? null,
+      accessPreset,
+    );
   }
 
   findChatIdByThreadId(threadId: string): string | null {
@@ -316,6 +334,25 @@ export class BridgeStore {
       createdAt: Number(row.created_at),
       resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at)
     };
+  }
+
+  private writeChatSettings(
+    chatId: string,
+    model: string | null,
+    reasoningEffort: ReasoningEffortValue | null,
+    locale: AppLocale | null,
+    accessPreset: AccessPresetValue | null,
+  ): void {
+    this.db.prepare(`
+      INSERT INTO chat_settings (chat_id, model, reasoning_effort, locale, access_preset, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(chat_id) DO UPDATE SET
+        model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort,
+        locale = excluded.locale,
+        access_preset = excluded.access_preset,
+        updated_at = excluded.updated_at
+    `).run(chatId, model, reasoningEffort, locale, accessPreset, Date.now());
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {

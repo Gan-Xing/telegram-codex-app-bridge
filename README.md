@@ -8,6 +8,7 @@ Use a Telegram bot to control a local Codex Desktop instance through `codex app-
 - Local `codex app-server` transport over loopback WebSocket
 - Sticky chat-to-thread binding with `/threads`, `/open`, `/new`, `/where`, `/interrupt`
 - Chat-scoped model and reasoning-effort control with `/models` and optional `/model`/`/effort` aliases
+- Chat-scoped access presets with `/permissions` and optional `/access` alias
 - Deep-link sync from Telegram into `Codex.app` with `/open` and `/reveal`
 - Inline approval buttons for command and file-change approvals
 - SQLite persistence for bindings, offsets, approvals, and audit logs
@@ -86,6 +87,7 @@ CODEX_APP_SYNC_ON_OPEN=true
 CODEX_APP_SYNC_ON_TURN_COMPLETE=false
 DEFAULT_CWD=/Users/ganxing/Downloads
 DEFAULT_APPROVAL_POLICY=on-request
+DEFAULT_SANDBOX_MODE=workspace-write
 ```
 
 How the optional Telegram fields work:
@@ -110,7 +112,9 @@ Without `TG_ALLOWED_TOPIC_ID`, every bot in the same group treats the whole grou
 - `/open <n>`
 - `/new [cwd]`
 - `/models` opens the model and reasoning picker
+- `/permissions` opens the access preset picker (`read-only`, `default`, `full-access`)
 - `/model` and `/effort` are compatibility aliases for the same picker
+- `/access` is a compatibility alias for `/permissions`
 - `/reveal`
 - `/where`
 - `/interrupt`
@@ -185,6 +189,7 @@ CODEX_APP_SYNC_ON_OPEN=true
 CODEX_APP_SYNC_ON_TURN_COMPLETE=false
 DEFAULT_CWD=/Users/ganxing/Downloads
 DEFAULT_APPROVAL_POLICY=on-request
+DEFAULT_SANDBOX_MODE=workspace-write
 ```
 
 This is the common setup for one bot bound to one topic inside one group.
@@ -202,7 +207,7 @@ Common issues:
 - The same bot starts replying twice or Telegram shows polling conflicts:
   Make sure only one bridge process is running for that bot. This repo now uses a local lock file to block a second instance on the same Mac.
 - A message seemed to get no reply:
-  Check the latest activity card and streamed body below it. Private chat uses live drafts; topic/group mode uses segmented reply messages.
+  Check the latest activity card and streamed body below it. The bridge keeps partial output visible instead of replacing it with a generic loading line.
 
 See [`.env.example`](./.env.example) for the full list.
 

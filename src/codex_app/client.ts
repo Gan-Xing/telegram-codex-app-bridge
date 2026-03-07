@@ -3,7 +3,14 @@ import net from 'node:net';
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import type { Logger } from '../logger.js';
-import type { AppThread, ModelInfo, ReasoningEffortValue, ThreadSessionState, ThreadStatusKind } from '../types.js';
+import type {
+  AppThread,
+  ModelInfo,
+  ReasoningEffortValue,
+  SandboxModeValue,
+  ThreadSessionState,
+  ThreadStatusKind,
+} from '../types.js';
 import { buildThreadDeepLink, openUrl } from './deeplink.js';
 
 interface JsonRpcResponse {
@@ -31,6 +38,7 @@ interface ListThreadsOptions {
 interface StartThreadOptions {
   cwd: string | null;
   approvalPolicy: string;
+  sandboxMode: SandboxModeValue;
   model: string | null;
 }
 
@@ -55,6 +63,7 @@ interface StartTurnOptions {
   threadId: string;
   input: TurnInput[];
   approvalPolicy: string;
+  sandboxMode: SandboxModeValue;
   cwd: string | null;
   model: string | null;
   effort: ReasoningEffortValue | null;
@@ -131,7 +140,7 @@ export class CodexAppClient extends EventEmitter {
       approvalPolicy: options.approvalPolicy,
       model: options.model,
       modelProvider: null,
-      sandbox: null,
+      sandbox: options.sandboxMode,
       config: null,
       serviceName: null,
       baseInstructions: null,
@@ -168,7 +177,7 @@ export class CodexAppClient extends EventEmitter {
       input: options.input,
       cwd: options.cwd,
       approvalPolicy: options.approvalPolicy,
-      sandboxPolicy: null,
+      sandboxPolicy: mapSandboxPolicy(options.sandboxMode),
       model: options.model,
       effort: options.effort,
       summary: null,
@@ -433,4 +442,14 @@ function mapModel(raw: any): ModelInfo {
     supportedReasoningEfforts: efforts,
     defaultReasoningEffort: String(raw.defaultReasoningEffort) as ReasoningEffortValue,
   };
+}
+
+function mapSandboxPolicy(mode: SandboxModeValue): { type: 'readOnly' | 'workspaceWrite' | 'dangerFullAccess' } {
+  if (mode === 'read-only') {
+    return { type: 'readOnly' };
+  }
+  if (mode === 'danger-full-access') {
+    return { type: 'dangerFullAccess' };
+  }
+  return { type: 'workspaceWrite' };
 }

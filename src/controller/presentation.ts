@@ -1,6 +1,16 @@
 import path from 'node:path';
 import { t } from '../i18n.js';
-import type { AppLocale, AppThread, ChatSessionSettings, ModelInfo, ReasoningEffortValue } from '../types.js';
+import type {
+  AccessPresetValue,
+  AppLocale,
+  AppThread,
+  ApprovalPolicyValue,
+  ChatSessionSettings,
+  ModelInfo,
+  ReasoningEffortValue,
+  SandboxModeValue,
+} from '../types.js';
+import type { ResolvedAccessMode } from './access.js';
 
 type InlineButton = { text: string; callback_data: string };
 
@@ -54,18 +64,57 @@ export function buildThreadsKeyboard(locale: AppLocale, threads: ThreadLike[]): 
   }]);
 }
 
-export function formatWhereMessage(locale: AppLocale, thread: AppThread, settings: ChatSessionSettings | null, defaultCwd: string): string {
+export function formatWhereMessage(
+  locale: AppLocale,
+  thread: AppThread,
+  settings: ChatSessionSettings | null,
+  defaultCwd: string,
+  access: ResolvedAccessMode,
+): string {
   return [
     t(locale, 'where_thread', { value: thread.threadId }),
     t(locale, 'where_title', { value: thread.name || t(locale, 'untitled') }),
     t(locale, 'where_preview', { value: thread.preview || t(locale, 'empty') }),
     t(locale, 'where_configured_model', { value: settings?.model ?? t(locale, 'server_default') }),
     t(locale, 'where_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }),
+    t(locale, 'where_access_preset', { value: formatAccessPresetLabel(locale, access.preset) }),
+    t(locale, 'where_approval_policy', { value: formatApprovalPolicyLabel(locale, access.approvalPolicy) }),
+    t(locale, 'where_sandbox_mode', { value: formatSandboxModeLabel(locale, access.sandboxMode) }),
     t(locale, 'where_provider', { value: thread.modelProvider ?? t(locale, 'unknown') }),
     t(locale, 'where_status', { value: formatStatus(locale, thread.status) }),
     t(locale, 'where_cwd', { value: thread.cwd ?? defaultCwd }),
     t(locale, 'where_updated', { value: formatIsoTime(locale, thread.updatedAt) }),
   ].join('\n');
+}
+
+export function formatAccessSettingsMessage(locale: AppLocale, access: ResolvedAccessMode): string {
+  return [
+    t(locale, 'permissions_title'),
+    t(locale, 'permissions_tap_to_change'),
+    '',
+    t(locale, 'permissions_preset', { value: escapeTelegramHtml(formatAccessPresetLabel(locale, access.preset)) }),
+    t(locale, 'permissions_approval_policy', { value: escapeTelegramHtml(formatApprovalPolicyLabel(locale, access.approvalPolicy)) }),
+    t(locale, 'permissions_sandbox_mode', { value: escapeTelegramHtml(formatSandboxModeLabel(locale, access.sandboxMode)) }),
+  ].join('\n');
+}
+
+export function buildAccessSettingsKeyboard(locale: AppLocale, access: ResolvedAccessMode): InlineButton[][] {
+  const currentPreset = access.preset;
+  const buttons: InlineButton[] = [
+    {
+      text: `${currentPreset === 'read-only' ? '• ' : ''}${t(locale, 'access_preset_read_only')}`,
+      callback_data: 'settings:access:read-only',
+    },
+    {
+      text: `${currentPreset === 'default' ? '• ' : ''}${t(locale, 'access_preset_default')}`,
+      callback_data: 'settings:access:default',
+    },
+    {
+      text: `${currentPreset === 'full-access' ? '• ' : ''}${t(locale, 'access_preset_full_access')}`,
+      callback_data: 'settings:access:full-access',
+    },
+  ];
+  return [buttons];
 }
 
 export function formatModelSettingsMessage(
@@ -179,6 +228,25 @@ export function clampEffortToModel(
     return { effort, adjustedFrom: null };
   }
   return { effort: model.defaultReasoningEffort, adjustedFrom: effort };
+}
+
+export function formatAccessPresetLabel(locale: AppLocale, preset: AccessPresetValue): string {
+  if (preset === 'read-only') return t(locale, 'access_preset_read_only');
+  if (preset === 'full-access') return t(locale, 'access_preset_full_access');
+  return t(locale, 'access_preset_default');
+}
+
+export function formatApprovalPolicyLabel(locale: AppLocale, policy: ApprovalPolicyValue): string {
+  if (policy === 'never') return t(locale, 'approval_policy_never');
+  if (policy === 'untrusted') return t(locale, 'approval_policy_untrusted');
+  if (policy === 'on-failure') return t(locale, 'approval_policy_on_failure');
+  return t(locale, 'approval_policy_on_request');
+}
+
+export function formatSandboxModeLabel(locale: AppLocale, mode: SandboxModeValue): string {
+  if (mode === 'danger-full-access') return t(locale, 'sandbox_mode_danger_full_access');
+  if (mode === 'read-only') return t(locale, 'sandbox_mode_read_only');
+  return t(locale, 'sandbox_mode_workspace_write');
 }
 
 function formatStatus(locale: AppLocale, status: AppThread['status']): string {
