@@ -106,6 +106,7 @@ async function main(): Promise<void> {
         botUsername: bot.username,
         currentBindings: 0,
         pendingApprovals: 0,
+        pendingUserInputs: 0,
         activeTurns: 0,
         lastError: null,
         updatedAt: new Date().toISOString(),

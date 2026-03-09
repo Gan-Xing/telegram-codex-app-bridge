@@ -6,6 +6,7 @@ import type {
   AppThread,
   ApprovalPolicyValue,
   ChatSessionSettings,
+  CollaborationModeValue,
   ModelInfo,
   ReasoningEffortValue,
   SandboxModeValue,
@@ -77,6 +78,7 @@ export function formatWhereMessage(
     t(locale, 'where_preview', { value: thread.preview || t(locale, 'empty') }),
     t(locale, 'where_configured_model', { value: settings?.model ?? t(locale, 'server_default') }),
     t(locale, 'where_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }),
+    t(locale, 'where_mode', { value: formatCollaborationModeLabel(locale, settings?.collaborationMode ?? null) }),
     t(locale, 'where_access_preset', { value: formatAccessPresetLabel(locale, access.preset) }),
     t(locale, 'where_approval_policy', { value: formatApprovalPolicyLabel(locale, access.approvalPolicy) }),
     t(locale, 'where_sandbox_mode', { value: formatSandboxModeLabel(locale, access.sandboxMode) }),
@@ -96,6 +98,35 @@ export function formatAccessSettingsMessage(locale: AppLocale, access: ResolvedA
     t(locale, 'permissions_approval_policy', { value: escapeTelegramHtml(formatApprovalPolicyLabel(locale, access.approvalPolicy)) }),
     t(locale, 'permissions_sandbox_mode', { value: escapeTelegramHtml(formatSandboxModeLabel(locale, access.sandboxMode)) }),
   ].join('\n');
+}
+
+export function formatModeSettingsMessage(
+  locale: AppLocale,
+  settings: ChatSessionSettings | null,
+): string {
+  return [
+    t(locale, 'mode_title'),
+    t(locale, 'mode_tap_to_change'),
+    '',
+    t(locale, 'mode_current', { value: escapeTelegramHtml(formatCollaborationModeLabel(locale, settings?.collaborationMode ?? null)) }),
+  ].join('\n');
+}
+
+export function buildModeSettingsKeyboard(
+  locale: AppLocale,
+  settings: ChatSessionSettings | null,
+): InlineButton[][] {
+  const current = settings?.collaborationMode ?? null;
+  return [[
+    {
+      text: `${current === null || current === 'default' ? '• ' : ''}${t(locale, 'mode_default')}`,
+      callback_data: 'settings:mode:default',
+    },
+    {
+      text: `${current === 'plan' ? '• ' : ''}${t(locale, 'mode_plan')}`,
+      callback_data: 'settings:mode:plan',
+    },
+  ]];
 }
 
 export function buildAccessSettingsKeyboard(locale: AppLocale, access: ResolvedAccessMode): InlineButton[][] {
@@ -241,6 +272,11 @@ export function formatApprovalPolicyLabel(locale: AppLocale, policy: ApprovalPol
   if (policy === 'untrusted') return t(locale, 'approval_policy_untrusted');
   if (policy === 'on-failure') return t(locale, 'approval_policy_on_failure');
   return t(locale, 'approval_policy_on_request');
+}
+
+export function formatCollaborationModeLabel(locale: AppLocale, mode: CollaborationModeValue | null): string {
+  if (mode === 'plan') return t(locale, 'mode_plan');
+  return t(locale, 'mode_default');
 }
 
 export function formatSandboxModeLabel(locale: AppLocale, mode: SandboxModeValue): string {

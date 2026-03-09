@@ -2,12 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAccessSettingsKeyboard,
+  buildModeSettingsKeyboard,
   buildModelSettingsKeyboard,
   buildThreadsKeyboard,
   clampEffortToModel,
   formatAccessSettingsMessage,
   formatAccessPresetLabel,
   formatApprovalPolicyLabel,
+  formatCollaborationModeLabel,
+  formatModeSettingsMessage,
   formatModelSettingsMessage,
   formatSandboxModeLabel,
   formatThreadsMessage,
@@ -91,6 +94,7 @@ test('formatModelSettingsMessage renders current selections', () => {
     reasoningEffort: 'high',
     locale: 'en',
     accessPreset: null,
+    collaborationMode: null,
     updatedAt: Date.now(),
   };
 
@@ -128,6 +132,7 @@ test('buildModelSettingsKeyboard marks selected model and effort', () => {
     reasoningEffort: 'high',
     locale: 'en',
     accessPreset: null,
+    collaborationMode: null,
     updatedAt: Date.now(),
   };
 
@@ -212,6 +217,25 @@ test('access labels render in chinese locale', () => {
   assert.equal(formatSandboxModeLabel('zh', 'workspace-write'), '工作区可写');
 });
 
+test('mode presentation renders and marks selected option', () => {
+  const settings: ChatSessionSettings = {
+    chatId: 'chat-mode',
+    model: null,
+    reasoningEffort: null,
+    locale: 'en',
+    accessPreset: null,
+    collaborationMode: 'plan',
+    updatedAt: Date.now(),
+  };
+
+  assert.equal(formatCollaborationModeLabel('en', 'plan'), 'Plan');
+  assert.match(formatModeSettingsMessage('en', settings), /Current mode: <b>Plan<\/b>/);
+  assert.deepEqual(buildModeSettingsKeyboard('en', settings), [[
+    { text: 'Default', callback_data: 'settings:mode:default' },
+    { text: '• Plan', callback_data: 'settings:mode:plan' },
+  ]]);
+});
+
 test('presentation renders chinese locale strings', () => {
   const threads: AppThread[] = [
     {
@@ -246,6 +270,7 @@ test('presentation renders chinese locale strings', () => {
     reasoningEffort: null,
     locale: 'zh',
     accessPreset: null,
+    collaborationMode: null,
     updatedAt: Date.now(),
   };
   const renderedModels = formatModelSettingsMessage('zh', models, settings);

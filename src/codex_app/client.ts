@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import type { Logger } from '../logger.js';
 import type {
   AppThread,
+  CollaborationModeValue,
   ModelInfo,
   ReasoningEffortValue,
   SandboxModeValue,
@@ -68,7 +69,16 @@ interface StartTurnOptions {
   cwd: string | null;
   model: string | null;
   effort: ReasoningEffortValue | null;
+  collaborationMode: CollaborationModeValue | null;
 }
+
+export const PLAN_MODE_DEVELOPER_INSTRUCTIONS = [
+  'When you need user input in plan mode, ask one concrete decision at a time.',
+  'Prefer requestUserInput questions with 2-3 mutually exclusive options.',
+  'Put the recommended option first.',
+  'Keep option labels concise and descriptions short and user-facing.',
+  'Use isOther only when a custom answer would materially help.',
+].join('\n');
 
 export class CodexAppClient extends EventEmitter {
   private child: ChildProcessByStdio<null, Readable, Readable> | null = null;
@@ -185,7 +195,16 @@ export class CodexAppClient extends EventEmitter {
       summary: null,
       personality: null,
       outputSchema: null,
-      collaborationMode: null,
+      collaborationMode: options.collaborationMode === 'plan'
+        ? {
+            mode: 'plan',
+            settings: {
+              model: options.model,
+              reasoning_effort: options.effort,
+              developer_instructions: PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+            },
+          }
+        : null,
     });
     return (result as any).turn;
   }

@@ -6,7 +6,10 @@ import type {
   AppLocale,
   CachedThread,
   ChatSessionSettings,
+  CollaborationModeValue,
   PendingApprovalRecord,
+  PendingUserInputQuestion,
+  PendingUserInputRecord,
   ReasoningEffortValue,
   ThreadBinding,
 } from '../types.js';
@@ -43,6 +46,7 @@ export class BridgeStore {
         reasoning_effort TEXT,
         locale TEXT,
         access_preset TEXT,
+        collaboration_mode TEXT,
         updated_at INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS thread_cache (
@@ -73,6 +77,21 @@ export class BridgeStore {
         created_at INTEGER NOT NULL,
         resolved_at INTEGER
       );
+      CREATE TABLE IF NOT EXISTS pending_user_inputs (
+        local_id TEXT PRIMARY KEY,
+        server_request_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        message_id INTEGER,
+        questions_json TEXT NOT NULL,
+        answers_json TEXT NOT NULL,
+        current_question_index INTEGER NOT NULL,
+        awaiting_free_text INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER
+      );
       CREATE TABLE IF NOT EXISTS active_turn_previews (
         turn_id TEXT PRIMARY KEY,
         scope_id TEXT NOT NULL,
@@ -95,6 +114,7 @@ export class BridgeStore {
     this.ensureColumn('thread_cache', 'status', "TEXT NOT NULL DEFAULT 'idle'");
     this.ensureColumn('chat_settings', 'locale', 'TEXT');
     this.ensureColumn('chat_settings', 'access_preset', 'TEXT');
+    this.ensureColumn('chat_settings', 'collaboration_mode', 'TEXT');
   }
 
   getTelegramOffset(botKey: string): number {
@@ -130,7 +150,7 @@ export class BridgeStore {
   }
 
   getChatSettings(chatId: string): ChatSessionSettings | null {
-    const row = this.db.prepare('SELECT chat_id, model, reasoning_effort, locale, access_preset, updated_at FROM chat_settings WHERE chat_id = ?').get(chatId) as Record<string, unknown> | undefined;
+    const row = this.db.prepare('SELECT chat_id, model, reasoning_effort, locale, access_preset, collaboration_mode, updated_at FROM chat_settings WHERE chat_id = ?').get(chatId) as Record<string, unknown> | undefined;
     if (!row) return null;
     return {
       chatId: String(row.chat_id),
@@ -138,6 +158,7 @@ export class BridgeStore {
       reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as ReasoningEffortValue,
       locale: row.locale === null ? null : String(row.locale) as AppLocale,
       accessPreset: row.access_preset === null ? null : String(row.access_preset) as AccessPresetValue,
+      collaborationMode: row.collaboration_mode === null ? null : String(row.collaboration_mode) as CollaborationModeValue,
       updatedAt: Number(row.updated_at),
     };
   }
@@ -145,12 +166,26 @@ export class BridgeStore {
   setChatSettings(chatId: string, model: string | null, reasoningEffort: ReasoningEffortValue | null, locale?: AppLocale | null): void {
     const current = this.getChatSettings(chatId);
     const nextLocale = locale === undefined ? current?.locale ?? null : locale;
-    this.writeChatSettings(chatId, model, reasoningEffort, nextLocale, current?.accessPreset ?? null);
+    this.writeChatSettings(
+      chatId,
+      model,
+      reasoningEffort,
+      nextLocale,
+      current?.accessPreset ?? null,
+      current?.collaborationMode ?? null,
+    );
   }
 
   setChatLocale(chatId: string, locale: AppLocale): void {
     const current = this.getChatSettings(chatId);
-    this.writeChatSettings(chatId, current?.model ?? null, current?.reasoningEffort ?? null, locale, current?.accessPreset ?? null);
+    this.writeChatSettings(
+      chatId,
+      current?.model ?? null,
+      current?.reasoningEffort ?? null,
+      locale,
+      current?.accessPreset ?? null,
+      current?.collaborationMode ?? null,
+    );
   }
 
   setChatAccessPreset(chatId: string, accessPreset: AccessPresetValue | null): void {
@@ -161,6 +196,19 @@ export class BridgeStore {
       current?.reasoningEffort ?? null,
       current?.locale ?? null,
       accessPreset,
+      current?.collaborationMode ?? null,
+    );
+  }
+
+  setChatCollaborationMode(chatId: string, collaborationMode: CollaborationModeValue | null): void {
+    const current = this.getChatSettings(chatId);
+    this.writeChatSettings(
+      chatId,
+      current?.model ?? null,
+      current?.reasoningEffort ?? null,
+      current?.locale ?? null,
+      current?.accessPreset ?? null,
+      collaborationMode,
     );
   }
 
@@ -276,6 +324,78 @@ export class BridgeStore {
     return Number(row.count);
   }
 
+  savePendingUserInput(record: PendingUserInputRecord): void {
+    this.db.prepare(`
+      INSERT INTO pending_user_inputs (
+        local_id, server_request_id, chat_id, thread_id, turn_id, item_id, message_id,
+        questions_json, answers_json, current_question_index, awaiting_free_text, created_at, resolved_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      record.localId,
+      record.serverRequestId,
+      record.chatId,
+      record.threadId,
+      record.turnId,
+      record.itemId,
+      record.messageId,
+      JSON.stringify(record.questions),
+      JSON.stringify(record.answers),
+      record.currentQuestionIndex,
+      record.awaitingFreeText ? 1 : 0,
+      record.createdAt,
+      record.resolvedAt,
+    );
+  }
+
+  updatePendingUserInputMessage(localId: string, messageId: number): void {
+    this.db.prepare('UPDATE pending_user_inputs SET message_id = ? WHERE local_id = ?').run(messageId, localId);
+  }
+
+  updatePendingUserInputState(
+    localId: string,
+    answers: Record<string, string[]>,
+    currentQuestionIndex: number,
+    awaitingFreeText: boolean,
+  ): void {
+    this.db.prepare(`
+      UPDATE pending_user_inputs
+      SET answers_json = ?, current_question_index = ?, awaiting_free_text = ?
+      WHERE local_id = ?
+    `).run(
+      JSON.stringify(answers),
+      currentQuestionIndex,
+      awaitingFreeText ? 1 : 0,
+      localId,
+    );
+  }
+
+  getPendingUserInput(localId: string): PendingUserInputRecord | null {
+    const row = this.db.prepare('SELECT * FROM pending_user_inputs WHERE local_id = ?').get(localId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapPendingUserInput(row);
+  }
+
+  getPendingUserInputForChat(chatId: string): PendingUserInputRecord | null {
+    const row = this.db.prepare(`
+      SELECT *
+      FROM pending_user_inputs
+      WHERE chat_id = ? AND resolved_at IS NULL
+      ORDER BY created_at ASC
+      LIMIT 1
+    `).get(chatId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapPendingUserInput(row);
+  }
+
+  markPendingUserInputResolved(localId: string): void {
+    this.db.prepare('UPDATE pending_user_inputs SET resolved_at = ? WHERE local_id = ?').run(Date.now(), localId);
+  }
+
+  countPendingUserInputs(): number {
+    const row = this.db.prepare('SELECT COUNT(*) AS count FROM pending_user_inputs WHERE resolved_at IS NULL').get() as { count: number };
+    return Number(row.count);
+  }
+
   saveActiveTurnPreview(record: Pick<ActiveTurnPreviewRecord, 'turnId' | 'scopeId' | 'threadId' | 'messageId'>): void {
     const now = Date.now();
     this.db.prepare('DELETE FROM active_turn_previews WHERE turn_id = ? OR scope_id = ?').run(record.turnId, record.scopeId);
@@ -336,23 +456,43 @@ export class BridgeStore {
     };
   }
 
+  private mapPendingUserInput(row: Record<string, unknown>): PendingUserInputRecord {
+    return {
+      localId: String(row.local_id),
+      serverRequestId: String(row.server_request_id),
+      chatId: String(row.chat_id),
+      threadId: String(row.thread_id),
+      turnId: String(row.turn_id),
+      itemId: String(row.item_id),
+      messageId: row.message_id === null ? null : Number(row.message_id),
+      questions: parseJsonValue<PendingUserInputQuestion[]>(row.questions_json, []),
+      answers: parseJsonValue<Record<string, string[]>>(row.answers_json, {}),
+      currentQuestionIndex: Number(row.current_question_index),
+      awaitingFreeText: Number(row.awaiting_free_text) === 1,
+      createdAt: Number(row.created_at),
+      resolvedAt: row.resolved_at === null ? null : Number(row.resolved_at),
+    };
+  }
+
   private writeChatSettings(
     chatId: string,
     model: string | null,
     reasoningEffort: ReasoningEffortValue | null,
     locale: AppLocale | null,
     accessPreset: AccessPresetValue | null,
+    collaborationMode: CollaborationModeValue | null,
   ): void {
     this.db.prepare(`
-      INSERT INTO chat_settings (chat_id, model, reasoning_effort, locale, access_preset, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO chat_settings (chat_id, model, reasoning_effort, locale, access_preset, collaboration_mode, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chat_id) DO UPDATE SET
         model = excluded.model,
         reasoning_effort = excluded.reasoning_effort,
         locale = excluded.locale,
         access_preset = excluded.access_preset,
+        collaboration_mode = excluded.collaboration_mode,
         updated_at = excluded.updated_at
-    `).run(chatId, model, reasoningEffort, locale, accessPreset, Date.now());
+    `).run(chatId, model, reasoningEffort, locale, accessPreset, collaborationMode, Date.now());
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -361,5 +501,16 @@ export class BridgeStore {
       return;
     }
     this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function parseJsonValue<T>(value: unknown, fallback: T): T {
+  if (typeof value !== 'string' || !value.trim()) {
+    return fallback;
+  }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
   }
 }

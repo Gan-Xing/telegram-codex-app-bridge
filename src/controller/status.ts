@@ -4,6 +4,7 @@ import { t } from '../i18n.js';
 export interface ActiveTurnStatusSnapshot {
   interruptRequested: boolean;
   pendingApprovalKinds: ReadonlySet<PendingApprovalRecord['kind']>;
+  awaitingUserInput: boolean;
   toolStatusText: string | null;
   reasoningActive: boolean;
   hasStreamingReply: boolean;
@@ -15,6 +16,9 @@ export function renderActiveTurnStatus(locale: AppLocale, snapshot: ActiveTurnSt
   }
   if (snapshot.pendingApprovalKinds.size > 0) {
     return t(locale, 'approval_requested', { kind: formatApprovalKinds(locale, snapshot.pendingApprovalKinds) });
+  }
+  if (snapshot.awaitingUserInput) {
+    return t(locale, 'waiting_for_input');
   }
   if (snapshot.toolStatusText) {
     return snapshot.toolStatusText;

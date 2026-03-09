@@ -10,6 +10,7 @@ export type ApprovalPolicyValue = 'on-request' | 'on-failure' | 'never' | 'untru
 export type SandboxModeValue = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type AccessPresetValue = 'read-only' | 'default' | 'full-access';
 export type ReasoningEffortValue = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type CollaborationModeValue = 'default' | 'plan';
 export type ThreadStatusKind = 'active' | 'idle' | 'notLoaded' | 'systemError';
 
 export interface ChatSessionSettings {
@@ -18,6 +19,7 @@ export interface ChatSessionSettings {
   reasoningEffort: ReasoningEffortValue | null;
   locale: AppLocale | null;
   accessPreset: AccessPresetValue | null;
+  collaborationMode: CollaborationModeValue | null;
   updatedAt: number;
 }
 
@@ -62,6 +64,20 @@ export interface ModelInfo {
 
 export type ApprovalKind = 'command' | 'fileChange';
 
+export interface PendingUserInputOption {
+  label: string;
+  description: string;
+}
+
+export interface PendingUserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: PendingUserInputOption[] | null;
+}
+
 export interface PendingApprovalRecord {
   localId: string;
   serverRequestId: string;
@@ -79,6 +95,22 @@ export interface PendingApprovalRecord {
   resolvedAt: number | null;
 }
 
+export interface PendingUserInputRecord {
+  localId: string;
+  serverRequestId: string;
+  chatId: string;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  messageId: number | null;
+  questions: PendingUserInputQuestion[];
+  answers: Record<string, string[]>;
+  currentQuestionIndex: number;
+  awaitingFreeText: boolean;
+  createdAt: number;
+  resolvedAt: number | null;
+}
+
 export interface RuntimeStatus {
   running: boolean;
   connected: boolean;
@@ -86,6 +118,7 @@ export interface RuntimeStatus {
   botUsername: string | null;
   currentBindings: number;
   pendingApprovals: number;
+  pendingUserInputs: number;
   activeTurns: number;
   lastError: string | null;
   updatedAt: string;

@@ -12,6 +12,7 @@ test('normalizeLocale maps telegram language codes', () => {
 test('getTelegramCommands returns localized descriptions', () => {
   assert.equal(getTelegramCommands('en').find((entry) => entry.command === 'models')?.description, 'Model settings');
   assert.equal(getTelegramCommands('zh').find((entry) => entry.command === 'models')?.description, '模型设置');
+  assert.equal(getTelegramCommands('en').find((entry) => entry.command === 'mode')?.description, 'Plan/default mode');
 });
 
 test('t interpolates localized templates', () => {

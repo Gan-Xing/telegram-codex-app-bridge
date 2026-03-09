@@ -94,6 +94,73 @@ test('BridgeStore caches thread lists and pending approvals', () => {
   });
 });
 
+test('BridgeStore persists pending user input progress', () => {
+  withStore((store) => {
+    store.savePendingUserInput({
+      localId: 'input-1',
+      serverRequestId: 'request-1',
+      chatId: 'chat-2',
+      threadId: 'thread-a',
+      turnId: 'turn-1',
+      itemId: 'item-1',
+      messageId: null,
+      questions: [
+        {
+          id: 'direction',
+          header: 'Direction',
+          question: 'Which direction should I take?',
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: 'Keep current plan', description: 'Proceed with the current plan.' },
+          ],
+        },
+      ],
+      answers: {},
+      currentQuestionIndex: 0,
+      awaitingFreeText: false,
+      createdAt: 456,
+      resolvedAt: null,
+    });
+
+    assert.equal(store.countPendingUserInputs(), 1);
+    assert.equal(store.getPendingUserInputForChat('chat-2')?.localId, 'input-1');
+
+    store.updatePendingUserInputMessage('input-1', 77);
+    store.updatePendingUserInputState('input-1', { direction: ['Keep current plan'] }, 1, true);
+
+    assert.deepEqual(store.getPendingUserInput('input-1'), {
+      localId: 'input-1',
+      serverRequestId: 'request-1',
+      chatId: 'chat-2',
+      threadId: 'thread-a',
+      turnId: 'turn-1',
+      itemId: 'item-1',
+      messageId: 77,
+      questions: [
+        {
+          id: 'direction',
+          header: 'Direction',
+          question: 'Which direction should I take?',
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: 'Keep current plan', description: 'Proceed with the current plan.' },
+          ],
+        },
+      ],
+      answers: { direction: ['Keep current plan'] },
+      currentQuestionIndex: 1,
+      awaitingFreeText: true,
+      createdAt: 456,
+      resolvedAt: null,
+    });
+
+    store.markPendingUserInputResolved('input-1');
+    assert.equal(store.countPendingUserInputs(), 0);
+  });
+});
+
 test('BridgeStore persists chat session settings', () => {
   withStore((store) => {
     store.setChatSettings('chat-3', 'o3', 'high');
@@ -103,6 +170,7 @@ test('BridgeStore persists chat session settings', () => {
       reasoningEffort: 'high',
       locale: null,
       accessPreset: null,
+      collaborationMode: null,
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
@@ -113,6 +181,7 @@ test('BridgeStore persists chat session settings', () => {
       reasoningEffort: 'medium',
       locale: null,
       accessPreset: null,
+      collaborationMode: null,
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
@@ -123,6 +192,7 @@ test('BridgeStore persists chat session settings', () => {
       reasoningEffort: 'medium',
       locale: 'zh',
       accessPreset: null,
+      collaborationMode: null,
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
@@ -133,6 +203,18 @@ test('BridgeStore persists chat session settings', () => {
       reasoningEffort: 'medium',
       locale: 'zh',
       accessPreset: 'full-access',
+      collaborationMode: null,
+      updatedAt: store.getChatSettings('chat-3')!.updatedAt,
+    });
+
+    store.setChatCollaborationMode('chat-3', 'plan');
+    assert.deepEqual(store.getChatSettings('chat-3'), {
+      chatId: 'chat-3',
+      model: null,
+      reasoningEffort: 'medium',
+      locale: 'zh',
+      accessPreset: 'full-access',
+      collaborationMode: 'plan',
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
@@ -143,6 +225,7 @@ test('BridgeStore persists chat session settings', () => {
       reasoningEffort: 'low',
       locale: 'zh',
       accessPreset: 'full-access',
+      collaborationMode: 'plan',
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
   });

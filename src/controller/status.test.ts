@@ -6,6 +6,7 @@ test('interrupt status wins over all other activity states', () => {
   const text = renderActiveTurnStatus('en', {
     interruptRequested: true,
     pendingApprovalKinds: new Set(['command']),
+    awaitingUserInput: false,
     toolStatusText: 'Browsing 1 file',
     reasoningActive: true,
     hasStreamingReply: true,
@@ -17,6 +18,7 @@ test('approval status is rendered separately from thinking', () => {
   const text = renderActiveTurnStatus('zh', {
     interruptRequested: false,
     pendingApprovalKinds: new Set(['fileChange', 'command']),
+    awaitingUserInput: false,
     toolStatusText: null,
     reasoningActive: true,
     hasStreamingReply: false,
@@ -24,10 +26,23 @@ test('approval status is rendered separately from thinking', () => {
   assert.equal(text, '需要审批：文件修改、命令执行');
 });
 
+test('pending user input status is shown before thinking or streaming', () => {
+  const text = renderActiveTurnStatus('en', {
+    interruptRequested: false,
+    pendingApprovalKinds: new Set(),
+    awaitingUserInput: true,
+    toolStatusText: 'Browsing 1 file',
+    reasoningActive: true,
+    hasStreamingReply: true,
+  });
+  assert.equal(text, 'Waiting for your answer...');
+});
+
 test('streaming status is used when there is visible reply output', () => {
   const text = renderActiveTurnStatus('en', {
     interruptRequested: false,
     pendingApprovalKinds: new Set(),
+    awaitingUserInput: false,
     toolStatusText: null,
     reasoningActive: false,
     hasStreamingReply: true,

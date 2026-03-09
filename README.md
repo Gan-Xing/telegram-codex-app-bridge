@@ -8,9 +8,11 @@ Use a Telegram bot to control a local Codex host through `codex app-server`.
 - Local `codex app-server` transport over loopback WebSocket
 - Sticky chat-to-thread binding with `/threads`, `/open`, `/new`, `/where`, `/interrupt`
 - Chat-scoped model and reasoning-effort control with `/models` and optional `/model`/`/effort` aliases
+- Chat-scoped conversation mode control with `/mode` and optional `/plan` alias
 - Chat-scoped access presets with `/permissions` and optional `/access` alias
 - Deep-link sync into the local Codex desktop host with `/open` and `/reveal` when the host supports it
 - Inline approval buttons for command and file-change approvals
+- Interactive `request_user_input` flow with button-first plan clarifications, recommended first choices, and optional custom answers
 - SQLite persistence for bindings, offsets, approvals, and audit logs
 - Stable segmented live rendering across private chat and topic/group modes
 - Bottom activity cards for `thinking`, `browsing`, `approval`, `interrupt`, and tool summaries
@@ -137,8 +139,10 @@ Without `TG_ALLOWED_TOPIC_ID`, every bot in the same group treats the whole grou
 - `/open <n>`
 - `/new [cwd]`
 - `/models` opens the model and reasoning picker
+- `/mode` opens the conversation-mode picker (`default`, `plan`)
 - `/permissions` opens the access preset picker (`read-only`, `default`, `full-access`)
 - `/model` and `/effort` are compatibility aliases for the same picker
+- `/plan` is a compatibility alias for switching to plan mode
 - `/access` is a compatibility alias for `/permissions`
 - `/reveal`
 - `/where`
@@ -180,6 +184,7 @@ What is intentionally supported now:
 - Private chats and topics use segmented live messages so visible partial output is not overwritten by generic status text
 - Group topics use segmented messages, activity cards, and archived tool summaries
 - Tool actions such as `Read ...`, `Searched for ...`, `Ran ...`, and edit operations are summarized separately from the assistant body
+- Plan mode can render plan updates and pause on interactive questions until you answer in Telegram
 - Interrupt and approval states are shown as their own activity states instead of being mixed into generic "working" text
 
 What still remains an approximation of Codex App:
