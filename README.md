@@ -78,7 +78,7 @@ DETACH=true BUILD_BEFORE_RESTART=false ./scripts/service/restart-safe.sh
 ```
 
 `DETACH=true` launches a transient user-systemd job (`systemd-run --user`) so restart completion and Telegram callbacks still happen even if the current terminal/chat session is interrupted.
-`NOTIFY_TARGET` defaults to `private` (callback to `TG_ALLOWED_USER_ID` direct chat).
+`NOTIFY_TARGET` defaults to `auto`: it replies to the most recent inbound Telegram scope recorded by the bridge, so private-chat activity gets a private callback and topic activity gets a topic callback. If no recent scope is available, it falls back to the configured private chat / group defaults.
 
 ## Codex Skill
 

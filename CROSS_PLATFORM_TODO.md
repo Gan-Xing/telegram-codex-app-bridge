@@ -153,17 +153,24 @@
 - [x] 为 service 文件生成逻辑补测试
 - [x] 为 `/reveal` 在 unsupported host 上的降级行为补测试
 - [x] 为 `doctor` 新增平台检查补测试
-- [ ] 在 macOS 做一次回归 smoke test
+- [x] 在 macOS 做一次回归 smoke test
 - [x] 在 Linux 做一次完整 smoke test
 
 ## 完成标准
 
-- [ ] 同一套 repo 可以在 macOS 和 Linux 上通过 `npm run build`
-- [ ] 同一套 repo 可以在 macOS 和 Linux 上通过 `npm run doctor`
+- [x] 同一套 repo 可以在 macOS 和 Linux 上通过 `npm run build`
+- [x] 同一套 repo 可以在 macOS 和 Linux 上通过 `npm run doctor`
 - [x] 用户只需要记住统一的 service 命令入口，不需要记住 launchd/systemd 细节
 - [ ] macOS 现有体验不倒退
 - [x] Linux 即使没有桌面 app 也能稳定作为 bridge 主机运行
 - [x] skill、README、脚本和运行时行为一致
+
+### 2026-03-09 macOS 验收记录
+
+- 已验证：`npm test`、`npm run build`、`npm run doctor`
+- 已验证：`./scripts/service/install.sh`、`./scripts/service/status.sh`、`./scripts/service/logs.sh`、`./scripts/service/restart.sh`
+- 已验证：macOS `open` 可以成功执行 `codex://threads/<threadId>` deep link
+- 阻塞项：`./scripts/service/restart-safe.sh` 默认会 `source .env`，当前 `.env` 中 `CODEX_APP_LAUNCH_CMD=codex app` 这类带空格的值会被 shell 误解析，导致脚本失败；因此 `macOS 现有体验不倒退` 暂不能勾选
 
 ## 实施顺序建议
 

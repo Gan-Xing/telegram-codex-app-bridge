@@ -15,20 +15,127 @@ DETACH="${DETACH:-false}"
 START_NOTIFY="${START_NOTIFY:-true}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
 SAFE_RESTART_UNIT_PREFIX="${SAFE_RESTART_UNIT_PREFIX:-com.ganxing.telegram-codex-app-bridge.safe-restart}"
-NOTIFY_TARGET="${NOTIFY_TARGET:-private}"
+NOTIFY_TARGET="${NOTIFY_TARGET:-auto}"
+
+latest_notify_scope_cache="__unset__"
 
 load_env_file() {
   if [[ -f "$ENV_FILE" ]]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$ENV_FILE"
-    set +a
+    while IFS= read -r -d '' key && IFS= read -r -d '' value; do
+      export "${key}=${value}"
+    done < <(node - "$ENV_FILE" "$ROOT_DIR" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+
+const envPath = process.argv[2];
+const rootDir = process.argv[3];
+
+try {
+  const dotenv = require(path.join(rootDir, 'node_modules', 'dotenv'));
+  const parsed = dotenv.parse(fs.readFileSync(envPath, 'utf8'));
+  for (const [key, value] of Object.entries(parsed)) {
+    process.stdout.write(`${key}\u0000${value}\u0000`);
+  }
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Failed to parse ${envPath}: ${message}`);
+  process.exit(1);
+}
+NODE
+)
   fi
 }
 
+default_store_path() {
+  if [[ -n "${STORE_PATH:-}" ]]; then
+    printf '%s' "$STORE_PATH"
+    return
+  fi
+  printf '%s' "${APP_HOME}/data/bridge.sqlite"
+}
+
+read_latest_inbound_scope() {
+  local db_path
+  db_path="$(default_store_path)"
+  if [[ ! -f "$db_path" ]]; then
+    return 0
+  fi
+  node - "$db_path" <<'NODE'
+const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+
+const dbPath = process.argv[2];
+if (!dbPath || !fs.existsSync(dbPath)) {
+  process.exit(0);
+}
+
+try {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const row = db.prepare(`
+    SELECT chat_id
+    FROM audit_logs
+    WHERE direction = 'inbound'
+      AND event_type IN ('telegram.message', 'telegram.callback')
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `).get();
+  if (row && row.chat_id !== null && row.chat_id !== undefined) {
+    process.stdout.write(String(row.chat_id));
+  }
+  db.close();
+} catch {
+  process.exit(0);
+}
+NODE
+}
+
+resolve_notify_scope_id() {
+  if [[ -n "${NOTIFY_SCOPE_ID:-}" ]]; then
+    printf '%s' "$NOTIFY_SCOPE_ID"
+    return
+  fi
+  if [[ "$NOTIFY_TARGET" != "auto" ]]; then
+    return
+  fi
+  if [[ "$latest_notify_scope_cache" == "__unset__" ]]; then
+    latest_notify_scope_cache="$(read_latest_inbound_scope)"
+  fi
+  if [[ -n "$latest_notify_scope_cache" ]]; then
+    printf '%s' "$latest_notify_scope_cache"
+  fi
+}
+
+scope_chat_id() {
+  local scope_id="$1"
+  if [[ "$scope_id" == *"::"* ]]; then
+    printf '%s' "${scope_id%%::*}"
+    return
+  fi
+  printf '%s' "$scope_id"
+}
+
+scope_topic_id() {
+  local scope_id="$1"
+  local topic_part
+  if [[ "$scope_id" != *"::"* ]]; then
+    return
+  fi
+  topic_part="${scope_id##*::}"
+  if [[ "$topic_part" == "root" || -z "$topic_part" ]]; then
+    return
+  fi
+  printf '%s' "$topic_part"
+}
+
 resolve_notify_chat_id() {
+  local scope_id
   if [[ -n "${NOTIFY_CHAT_ID:-}" ]]; then
     printf '%s' "$NOTIFY_CHAT_ID"
+    return
+  fi
+  scope_id="$(resolve_notify_scope_id)"
+  if [[ -n "$scope_id" ]]; then
+    printf '%s' "$(scope_chat_id "$scope_id")"
     return
   fi
   case "$NOTIFY_TARGET" in
@@ -53,8 +160,14 @@ resolve_notify_chat_id() {
 }
 
 resolve_notify_topic_id() {
+  local scope_id
   if [[ -n "${NOTIFY_TOPIC_ID:-}" ]]; then
     printf '%s' "$NOTIFY_TOPIC_ID"
+    return
+  fi
+  scope_id="$(resolve_notify_scope_id)"
+  if [[ -n "$scope_id" ]]; then
+    printf '%s' "$(scope_topic_id "$scope_id")"
     return
   fi
   if [[ "$NOTIFY_TARGET" == "group" || "$NOTIFY_TARGET" == "auto" ]]; then
