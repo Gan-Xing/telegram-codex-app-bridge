@@ -115,6 +115,34 @@ test('BridgeStore caches thread lists and pending approvals', () => {
   });
 });
 
+test('BridgeStore persists thread name overrides across cache refreshes', () => {
+  withStore((store) => {
+    store.cacheThreadList('chat-rename', [{
+      threadId: 'thread-rename-1',
+      name: 'Original name',
+      preview: 'Original preview',
+      cwd: '/repo/rename',
+      modelProvider: 'openai',
+      status: 'idle',
+      updatedAt: 111,
+    }]);
+    store.setThreadNameOverride('chat-rename', 'thread-rename-1', 'Renamed thread');
+    assert.equal(store.getThreadNameOverride('chat-rename', 'thread-rename-1'), 'Renamed thread');
+    assert.equal(store.getCachedThread('chat-rename', 1)?.name, 'Renamed thread');
+
+    store.cacheThreadList('chat-rename', [{
+      threadId: 'thread-rename-1',
+      name: 'Server-side name',
+      preview: 'Updated preview',
+      cwd: '/repo/rename',
+      modelProvider: 'openai',
+      status: 'idle',
+      updatedAt: 222,
+    }]);
+    assert.equal(store.getCachedThread('chat-rename', 1)?.name, 'Renamed thread');
+  });
+});
+
 test('BridgeStore persists pending user input progress', () => {
   withStore((store) => {
     store.savePendingUserInput({

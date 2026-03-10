@@ -116,6 +116,14 @@ interface ToolDescriptor {
   line: string;
 }
 
+interface ThreadRenameDraft {
+  threadId: string;
+  currentName: string;
+  proposedName: string | null;
+  promptMessageId: number;
+  createdAt: number;
+}
+
 interface ActiveTurn {
   scopeId: string;
   chatId: string;
@@ -201,6 +209,7 @@ const MAX_RESOLVED_PLAN_SESSIONS_PER_CHAT = 20;
 
 export class BridgeController {
   private activeTurns = new Map<string, ActiveTurn>();
+  private threadRenameDrafts = new Map<string, ThreadRenameDraft>();
   private locks = new Map<string, Promise<void>>();
   private approvalTimers = new Map<string, NodeJS.Timeout>();
   private attachedThreads = new Set<string>();
@@ -270,6 +279,7 @@ export class BridgeController {
 
   async stop(): Promise<void> {
     await this.abandonActiveTurns();
+    this.threadRenameDrafts.clear();
     this.bot.stop();
     for (const timer of this.approvalTimers.values()) {
       clearTimeout(timer);
@@ -353,6 +363,12 @@ export class BridgeController {
         await this.handlePendingUserInputText(scopeId, pendingUserInput, decision.text, locale);
         return;
       }
+    }
+
+    const threadRenameDraft = this.threadRenameDrafts.get(scopeId) ?? null;
+    if (threadRenameDraft) {
+      await this.handleThreadRenameText(scopeId, threadRenameDraft, decision.text, locale);
+      return;
     }
 
     const awaitingPlanConfirmation = this.getAwaitingPlanConfirmationSession(scopeId);
@@ -586,6 +602,16 @@ export class BridgeController {
     const threadMatch = /^thread:open:(.+)$/.exec(event.data);
     if (threadMatch) {
       await this.handleThreadOpenCallback(event, threadMatch[1]!, locale);
+      return;
+    }
+    const threadRenameMatch = /^thread:rename:(start|confirm|cancel):(.+)$/.exec(event.data);
+    if (threadRenameMatch) {
+      await this.handleThreadRenameCallback(
+        event,
+        threadRenameMatch[1]! as 'start' | 'confirm' | 'cancel',
+        threadRenameMatch[2]!,
+        locale,
+      );
       return;
     }
     const navMatch = /^nav:(models|mode|threads|reveal|permissions)$/.exec(event.data);
@@ -2431,6 +2457,155 @@ export class BridgeController {
     await this.bot.answerCallback(event.callbackQueryId, callbackText);
   }
 
+  private async handleThreadRenameCallback(
+    event: TelegramCallbackEvent,
+    action: 'start' | 'confirm' | 'cancel',
+    threadId: string,
+    locale: AppLocale,
+  ): Promise<void> {
+    const scopeId = event.scopeId;
+    if (action === 'start') {
+      const started = await this.startThreadRenameDraft(scopeId, threadId, locale);
+      await this.bot.answerCallback(
+        event.callbackQueryId,
+        started ? t(locale, 'thread_rename_started') : t(locale, 'thread_no_longer_available'),
+      );
+      return;
+    }
+
+    const draft = this.threadRenameDrafts.get(scopeId) ?? null;
+    if (!draft || draft.threadId !== threadId) {
+      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'thread_rename_missing'));
+      return;
+    }
+
+    if (action === 'cancel') {
+      await this.resolveThreadRenameDraft(scopeId, draft, t(locale, 'thread_rename_cancelled'));
+      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'thread_rename_cancelled'));
+      return;
+    }
+
+    if (!draft.proposedName) {
+      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'thread_rename_input_required'));
+      return;
+    }
+
+    try {
+      await this.app.renameThread(threadId, draft.proposedName);
+    } catch (error) {
+      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'thread_rename_sync_failed', { error: formatUserError(error) }));
+      return;
+    }
+
+    this.store.setThreadNameOverride(scopeId, threadId, draft.proposedName);
+    await this.resolveThreadRenameDraft(scopeId, draft, t(locale, 'thread_rename_updated', { value: draft.proposedName }));
+    await this.bot.answerCallback(event.callbackQueryId, t(locale, 'decision_recorded'));
+    try {
+      await this.showThreadsPanel(scopeId, undefined, undefined, locale);
+    } catch (error) {
+      this.logger.warn('thread.rename_refresh_failed', { scopeId, threadId, error: String(error) });
+    }
+  }
+
+  private async startThreadRenameDraft(scopeId: string, threadId: string, locale: AppLocale): Promise<boolean> {
+    const existing = this.threadRenameDrafts.get(scopeId) ?? null;
+    if (existing) {
+      await this.resolveThreadRenameDraft(scopeId, existing, t(locale, 'thread_rename_cancelled'));
+    }
+
+    const cached = this.store.listCachedThreads(scopeId).find((thread) => thread.threadId === threadId) ?? null;
+    if (!cached) {
+      const thread = await this.app.readThread(threadId, false);
+      if (!thread) {
+        return false;
+      }
+      const currentName = normalizeThreadRenameLabel(thread.name || thread.preview || t(locale, 'untitled'));
+      const promptMessageId = await this.sendMessage(
+        scopeId,
+        t(locale, 'thread_rename_prompt', { threadId, value: truncateInline(currentName, 60) }),
+        threadRenamePromptKeyboard(locale, threadId, false),
+      );
+      this.threadRenameDrafts.set(scopeId, {
+        threadId,
+        currentName,
+        proposedName: null,
+        promptMessageId,
+        createdAt: Date.now(),
+      });
+      return true;
+    }
+
+    const currentName = normalizeThreadRenameLabel(cached.name || cached.preview || t(locale, 'untitled'));
+    const promptMessageId = await this.sendMessage(
+      scopeId,
+      t(locale, 'thread_rename_prompt', { threadId, value: truncateInline(currentName, 60) }),
+      threadRenamePromptKeyboard(locale, threadId, false),
+    );
+    this.threadRenameDrafts.set(scopeId, {
+      threadId,
+      currentName,
+      proposedName: null,
+      promptMessageId,
+      createdAt: Date.now(),
+    });
+    return true;
+  }
+
+  private async handleThreadRenameText(
+    scopeId: string,
+    draft: ThreadRenameDraft,
+    text: string,
+    locale: AppLocale,
+  ): Promise<void> {
+    const nextName = normalizeThreadRenameInput(text);
+    if (!nextName) {
+      await this.sendMessage(scopeId, t(locale, 'thread_rename_invalid'));
+      return;
+    }
+
+    draft.proposedName = nextName;
+    const reviewText = t(locale, 'thread_rename_review', {
+      threadId: draft.threadId,
+      from: truncateInline(draft.currentName, 60),
+      to: truncateInline(nextName, 60),
+    });
+    const keyboard = threadRenamePromptKeyboard(locale, draft.threadId, true);
+    try {
+      await this.editMessage(scopeId, draft.promptMessageId, reviewText, keyboard);
+      return;
+    } catch (error) {
+      if (!isTelegramMessageGone(error)) {
+        this.logger.warn('thread.rename_prompt_edit_failed', {
+          scopeId,
+          threadId: draft.threadId,
+          messageId: draft.promptMessageId,
+          error: String(error),
+        });
+      }
+    }
+
+    draft.promptMessageId = await this.sendMessage(scopeId, reviewText, keyboard);
+  }
+
+  private async resolveThreadRenameDraft(scopeId: string, draft: ThreadRenameDraft, text: string): Promise<void> {
+    this.threadRenameDrafts.delete(scopeId);
+    try {
+      await this.editMessage(scopeId, draft.promptMessageId, text, []);
+      return;
+    } catch (error) {
+      if (isTelegramMessageGone(error)) {
+        return;
+      }
+      this.logger.warn('thread.rename_prompt_resolve_failed', {
+        scopeId,
+        threadId: draft.threadId,
+        messageId: draft.promptMessageId,
+        error: String(error),
+      });
+    }
+    await this.sendMessage(scopeId, text);
+  }
+
   private async handleTurnInterruptCallback(event: TelegramCallbackEvent, turnId: string, locale: AppLocale): Promise<void> {
     const scopeId = event.scopeId;
     const active = this.activeTurns.get(turnId);
@@ -2524,7 +2699,11 @@ export class BridgeController {
       return;
     }
 
-    const text = formatWhereMessage(locale, thread, settings, this.config.defaultCwd, access);
+    const threadWithDisplayName = {
+      ...thread,
+      name: this.store.getThreadNameOverride(scopeId, thread.threadId) ?? thread.name,
+    };
+    const text = formatWhereMessage(locale, threadWithDisplayName, settings, this.config.defaultCwd, access);
     if (messageId !== undefined) {
       await this.editMessage(scopeId, messageId, text, whereKeyboard(locale, true));
       return;
@@ -2540,7 +2719,7 @@ export class BridgeController {
     });
     const cached = threads.map((thread) => ({
       threadId: thread.threadId,
-      name: thread.name,
+      name: this.store.getThreadNameOverride(scopeId, thread.threadId) ?? thread.name,
       preview: thread.preview,
       cwd: thread.cwd,
       modelProvider: thread.modelProvider,
@@ -3932,6 +4111,19 @@ function truncateInline(value: string, limit: number): string {
   return `${value.slice(0, Math.max(0, limit - 1))}…`;
 }
 
+function normalizeThreadRenameLabel(value: string): string {
+  const compacted = value.replace(/\s+/g, ' ').trim();
+  return compacted || 'Untitled';
+}
+
+function normalizeThreadRenameInput(value: string): string | null {
+  const compacted = value.replace(/\s+/g, ' ').trim();
+  if (!compacted || compacted.length > 60) {
+    return null;
+  }
+  return compacted;
+}
+
 function normalizeRequestedCollaborationMode(value: string): CollaborationModeValue | null {
   const normalized = value.trim().toLowerCase();
   if (!normalized || normalized === 'default') {
@@ -4040,6 +4232,20 @@ function buildPendingUserInputReviewKeyboard(
 function activeTurnKeyboard(locale: AppLocale, turnId: string): Array<Array<{ text: string; callback_data: string }>> {
   return [[
     { text: t(locale, 'button_interrupt'), callback_data: `turn:interrupt:${turnId}` },
+  ]];
+}
+
+function threadRenamePromptKeyboard(
+  locale: AppLocale,
+  threadId: string,
+  hasProposedName: boolean,
+): Array<Array<{ text: string; callback_data: string }>> {
+  if (!hasProposedName) {
+    return [[{ text: t(locale, 'button_cancel'), callback_data: `thread:rename:cancel:${threadId}` }]];
+  }
+  return [[
+    { text: t(locale, 'button_confirm'), callback_data: `thread:rename:confirm:${threadId}` },
+    { text: t(locale, 'button_cancel'), callback_data: `thread:rename:cancel:${threadId}` },
   ]];
 }
 

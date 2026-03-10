@@ -36,7 +36,7 @@ test('formatThreadsMessage highlights current thread and metadata', () => {
 
   const rendered = formatThreadsMessage('en', threads, 'thread-1');
   assert.match(rendered, /<b>Recent threads<\/b>/);
-  assert.match(rendered, /Tap a button below to open a thread/);
+  assert.match(rendered, /Tap a button below to open or rename a thread/);
   assert.match(rendered, /Current: <b>Fix Telegram bridge<\/b>/);
   assert.match(rendered, /project \| 2m ago/);
 });
@@ -59,7 +59,7 @@ test('formatThreadsMessage escapes html and shows filter', () => {
   assert.doesNotMatch(rendered, /Review <auth> flow/);
 });
 
-test('buildThreadsKeyboard creates one open button per thread', () => {
+test('buildThreadsKeyboard creates open and rename buttons per thread', () => {
   const threads: AppThread[] = [
     {
       threadId: 'thread-2',
@@ -72,10 +72,16 @@ test('buildThreadsKeyboard creates one open button per thread', () => {
     },
   ];
 
-  assert.deepEqual(buildThreadsKeyboard('en', threads), [[{
-    text: '1. Review auth flow',
-    callback_data: 'thread:open:thread-2',
-  }]]);
+  assert.deepEqual(buildThreadsKeyboard('en', threads), [[
+    {
+      text: '1. Review auth flow',
+      callback_data: 'thread:open:thread-2',
+    },
+    {
+      text: 'Rename',
+      callback_data: 'thread:rename:start:thread-2',
+    },
+  ]]);
 });
 
 test('formatModelSettingsMessage renders current selections', () => {
@@ -304,7 +310,7 @@ test('presentation renders chinese locale strings', () => {
   ];
   const renderedThreads = formatThreadsMessage('zh', threads, 'thread-zh');
   assert.match(renderedThreads, /<b>最近线程<\/b>/);
-  assert.match(renderedThreads, /点击下方按钮即可切换线程/);
+  assert.match(renderedThreads, /点击下方按钮可打开或重命名线程/);
   assert.match(renderedThreads, /当前：<b>修复桥接<\/b>/);
 
   const models: ModelInfo[] = [

@@ -59,10 +59,13 @@ export function formatThreadsMessage(
 }
 
 export function buildThreadsKeyboard(locale: AppLocale, threads: ThreadLike[]): Array<Array<{ text: string; callback_data: string }>> {
-  return threads.map((thread, index) => [{
-    text: `${index + 1}. ${truncate(compactWhitespace(thread.name || thread.preview || t(locale, 'empty')), 28)}`,
-    callback_data: `thread:open:${thread.threadId}`,
-  }]);
+  return threads.map((thread, index) => {
+    const title = `${index + 1}. ${truncate(compactWhitespace(thread.name || thread.preview || t(locale, 'empty')), 22)}`;
+    return [
+      { text: title, callback_data: `thread:open:${thread.threadId}` },
+      { text: t(locale, 'button_rename'), callback_data: `thread:rename:start:${thread.threadId}` },
+    ];
+  });
 }
 
 export function formatWhereMessage(

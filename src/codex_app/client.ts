@@ -155,6 +155,10 @@ export class CodexAppClient extends EventEmitter {
     return thread ? mapThread(thread) : null;
   }
 
+  async renameThread(threadId: string, name: string): Promise<void> {
+    await this.request('thread/name/set', { threadId, name });
+  }
+
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {
     const result = await this.request('thread/start', {
       cwd: options.cwd,

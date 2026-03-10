@@ -87,6 +87,13 @@ export class BridgeStore {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (chat_id, idx)
       );
+      CREATE TABLE IF NOT EXISTS thread_name_overrides (
+        chat_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        custom_name TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (chat_id, thread_id)
+      );
       CREATE TABLE IF NOT EXISTS pending_approvals (
         local_id TEXT PRIMARY KEY,
         server_request_id TEXT NOT NULL,
@@ -355,17 +362,19 @@ export class BridgeStore {
 
   cacheThreadList(chatId: string, threads: Array<Omit<CachedThread, 'index'>>): void {
     const deleteStmt = this.db.prepare('DELETE FROM thread_cache WHERE chat_id = ?');
+    const overrideStmt = this.db.prepare('SELECT custom_name FROM thread_name_overrides WHERE chat_id = ? AND thread_id = ?');
     const insertStmt = this.db.prepare(`
       INSERT INTO thread_cache (chat_id, idx, thread_id, name, preview, cwd, model_provider, status, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     deleteStmt.run(chatId);
     threads.forEach((thread, index) => {
+      const override = overrideStmt.get(chatId, thread.threadId) as { custom_name: string } | undefined;
       insertStmt.run(
         chatId,
         index + 1,
         thread.threadId,
-        thread.name,
+        override ? String(override.custom_name) : thread.name,
         thread.preview,
         thread.cwd,
         thread.modelProvider,
@@ -373,6 +382,38 @@ export class BridgeStore {
         thread.updatedAt,
       );
     });
+  }
+
+  setThreadNameOverride(chatId: string, threadId: string, customName: string): void {
+    const normalized = customName.trim();
+    if (!normalized) {
+      this.clearThreadNameOverride(chatId, threadId);
+      return;
+    }
+    this.db.prepare(`
+      INSERT INTO thread_name_overrides (chat_id, thread_id, custom_name, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(chat_id, thread_id)
+      DO UPDATE SET custom_name = excluded.custom_name, updated_at = excluded.updated_at
+    `).run(chatId, threadId, normalized, Date.now());
+    this.db.prepare(`
+      UPDATE thread_cache
+      SET name = ?
+      WHERE chat_id = ? AND thread_id = ?
+    `).run(normalized, chatId, threadId);
+  }
+
+  getThreadNameOverride(chatId: string, threadId: string): string | null {
+    const row = this.db.prepare(`
+      SELECT custom_name
+      FROM thread_name_overrides
+      WHERE chat_id = ? AND thread_id = ?
+    `).get(chatId, threadId) as { custom_name: string } | undefined;
+    return row ? String(row.custom_name) : null;
+  }
+
+  clearThreadNameOverride(chatId: string, threadId: string): void {
+    this.db.prepare('DELETE FROM thread_name_overrides WHERE chat_id = ? AND thread_id = ?').run(chatId, threadId);
   }
 
   getCachedThread(chatId: string, index: number): CachedThread | null {

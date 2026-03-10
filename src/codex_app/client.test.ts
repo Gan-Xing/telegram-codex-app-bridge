@@ -81,6 +81,25 @@ test('startTurn allows plan developer instructions to be overridden per turn', a
   );
 });
 
+test('renameThread calls thread/name/set with threadId and name', async () => {
+  const client = new CodexAppClient('codex', '', false, makeLogger(), 'linux');
+  let capturedMethod = '';
+  let capturedParams: any = null;
+  (client as any).request = async (method: string, params: any) => {
+    capturedMethod = method;
+    capturedParams = params;
+    return {};
+  };
+
+  await client.renameThread('019cd3f5-6f58-7580-ad62-44d93775169a', 'Renamed Thread');
+
+  assert.equal(capturedMethod, 'thread/name/set');
+  assert.deepEqual(capturedParams, {
+    threadId: '019cd3f5-6f58-7580-ad62-44d93775169a',
+    name: 'Renamed Thread',
+  });
+});
+
 test('readAccountRateLimits maps the codex rate limit windows', async () => {
   const client = new CodexAppClient('codex', '', false, makeLogger(), 'linux');
   (client as any).request = async (method: string) => {
