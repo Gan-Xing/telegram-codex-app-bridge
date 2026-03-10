@@ -25,6 +25,14 @@ interface ThreadLike {
   updatedAt: number;
 }
 
+export type ThreadHistoryPreviewStatus = 'complete' | 'partial' | 'failed' | 'interrupted';
+
+export interface ThreadHistoryPreviewTurn {
+  userText: string | null;
+  assistantText: string | null;
+  status: ThreadHistoryPreviewStatus;
+}
+
 export function formatThreadsMessage(
   locale: AppLocale,
   threads: ThreadLike[],
@@ -66,6 +74,33 @@ export function buildThreadsKeyboard(locale: AppLocale, threads: ThreadLike[]): 
       { text: t(locale, 'button_rename'), callback_data: `thread:rename:start:${thread.threadId}` },
     ];
   });
+}
+
+export function formatThreadHistoryPreviewMessage(
+  locale: AppLocale,
+  thread: Pick<ThreadLike, 'threadId' | 'name' | 'preview'>,
+  turns: ThreadHistoryPreviewTurn[],
+): string {
+  const title = truncate(compactWhitespace(thread.name || thread.preview || t(locale, 'untitled')), 48);
+  const lines = [
+    `<b>${escapeTelegramHtml(t(locale, 'thread_history_title'))}</b>`,
+    t(locale, 'thread_history_switched_to', { value: escapeTelegramHtml(title) }),
+    t(locale, 'thread_history_thread_id', { value: escapeTelegramHtml(thread.threadId) }),
+  ];
+  if (turns.length === 0) {
+    lines.push('', escapeTelegramHtml(t(locale, 'thread_history_empty')));
+    return lines.join('\n');
+  }
+  lines.push('', escapeTelegramHtml(t(locale, 'thread_history_recent_turns')));
+  for (const [index, turn] of turns.entries()) {
+    const userText = truncate(compactWhitespace(turn.userText || t(locale, 'empty')), 220);
+    const assistantText = truncate(compactWhitespace(turn.assistantText || t(locale, 'thread_history_no_reply')), 280);
+    lines.push('');
+    lines.push(`<b>${escapeTelegramHtml(t(locale, 'thread_history_turn_label', { value: index + 1 }))}</b>`);
+    lines.push(`${escapeTelegramHtml(t(locale, 'thread_history_you'))}: ${escapeTelegramHtml(userText)}`);
+    lines.push(`${escapeTelegramHtml(formatThreadHistoryAssistantLabel(locale, turn.status))}: ${escapeTelegramHtml(assistantText)}`);
+  }
+  return lines.join('\n');
 }
 
 export function formatWhereMessage(
@@ -387,6 +422,13 @@ function formatCwd(locale: AppLocale, cwd: string | null): string {
   if (!cwd) return t(locale, 'no_cwd');
   const base = path.basename(cwd);
   return base || cwd;
+}
+
+function formatThreadHistoryAssistantLabel(locale: AppLocale, status: ThreadHistoryPreviewStatus): string {
+  if (status === 'failed') return t(locale, 'thread_history_codex_failed');
+  if (status === 'interrupted') return t(locale, 'thread_history_codex_interrupted');
+  if (status === 'partial') return t(locale, 'thread_history_codex_partial');
+  return t(locale, 'thread_history_codex');
 }
 
 function compactWhitespace(value: string): string {

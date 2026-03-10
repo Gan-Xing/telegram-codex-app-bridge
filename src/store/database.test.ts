@@ -471,6 +471,38 @@ test('BridgeStore persists active turn preview cleanup state', () => {
   });
 });
 
+test('BridgeStore persists thread history preview state per scope', () => {
+  withStore((store) => {
+    store.saveThreadHistoryPreview({
+      scopeId: 'chat-5::root',
+      threadId: 'thread-1',
+      messageId: 70,
+    });
+
+    let preview = store.getThreadHistoryPreview('chat-5::root');
+    assert.deepEqual(preview, {
+      scopeId: 'chat-5::root',
+      threadId: 'thread-1',
+      messageId: 70,
+      createdAt: preview!.createdAt,
+      updatedAt: preview!.updatedAt,
+    });
+
+    store.saveThreadHistoryPreview({
+      scopeId: 'chat-5::root',
+      threadId: 'thread-2',
+      messageId: 71,
+    });
+
+    preview = store.getThreadHistoryPreview('chat-5::root');
+    assert.equal(preview?.threadId, 'thread-2');
+    assert.equal(preview?.messageId, 71);
+
+    store.removeThreadHistoryPreview('chat-5::root');
+    assert.equal(store.getThreadHistoryPreview('chat-5::root'), null);
+  });
+});
+
 test('BridgeStore cleans up resolved history and respects plan history settings', () => {
   withStore((store) => {
     const now = Date.now();

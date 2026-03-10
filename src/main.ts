@@ -11,6 +11,7 @@ import { BridgeController } from './controller/controller.js';
 import { acquireProcessLock, LockHeldError } from './lock.js';
 import { detectPlatformCapabilities, getCommandLookupProgram, getDesktopOpenSupport } from './platform/capabilities.js';
 import { readRuntimeStatus, writeRuntimeStatus } from './runtime.js';
+import { ThreadsWebAppServer } from './webapp/server.js';
 
 const command = process.argv[2] || 'serve';
 dotenv.config();
@@ -67,8 +68,19 @@ async function main(): Promise<void> {
   const logger = new Logger(config.logLevel, config.logPath);
   const processLock = acquireProcessLock(config.lockPath);
   let store: BridgeStore | null = null;
+  let webAppServer: ThreadsWebAppServer | null = null;
   try {
     store = new BridgeStore(config.storePath);
+    if (config.tgWebAppBaseUrl) {
+      webAppServer = new ThreadsWebAppServer(
+        {
+          host: config.webAppBindHost || '127.0.0.1',
+          port: config.webAppBindPort ?? 8787,
+        },
+        logger,
+      );
+      await webAppServer.start();
+    }
     const bot = new TelegramGateway(
       config.tgBotToken,
       config.tgAllowedUserId,
@@ -99,6 +111,7 @@ async function main(): Promise<void> {
     const shutdown = async (signal: string): Promise<void> => {
       logger.info('bridge.shutting_down', { signal });
       await controller.stop();
+      await webAppServer?.stop();
       writeRuntimeStatus(config.statusPath, {
         running: false,
         connected: false,
@@ -121,6 +134,7 @@ async function main(): Promise<void> {
     process.on('SIGINT', () => void shutdown('SIGINT'));
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
   } catch (error) {
+    await webAppServer?.stop().catch(() => {});
     store?.close();
     processLock.release();
     throw error;

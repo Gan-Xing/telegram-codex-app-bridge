@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { TelegramGateway, type TelegramTextEvent } from './gateway.js';
+import { TelegramGateway, type TelegramTextEvent, type TelegramWebAppEvent } from './gateway.js';
 
 const storeStub = {
   getTelegramOffset(): number {
@@ -144,4 +144,30 @@ test('TelegramGateway still emits private chat messages when a group chat is con
   assert.equal(events[0]?.scopeId, '99::root');
   assert.equal(events[0]?.chatType, 'private');
   assert.equal(events[0]?.topicId, null);
+});
+
+test('TelegramGateway emits web app payload messages', async () => {
+  const gateway = new TelegramGateway('token', '42', null, 1000, storeStub as any, loggerStub as any);
+  const events: TelegramWebAppEvent[] = [];
+  gateway.on('webapp', (event: TelegramWebAppEvent) => {
+    events.push(event);
+  });
+
+  await (gateway as any).handleUpdate({
+    update_id: 5,
+    message: {
+      message_id: 14,
+      chat: { id: 99, type: 'private' },
+      from: { id: 42, language_code: 'zh-CN' },
+      web_app_data: {
+        button_text: '线程面板',
+        data: JSON.stringify({ v: 1, kind: 'threads-panel', action: 'open', threadId: 'thread-1' }),
+      },
+    },
+  });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.scopeId, '99::root');
+  assert.equal(events[0]?.buttonText, '线程面板');
+  assert.match(events[0]?.data ?? '', /"kind":"threads-panel"/);
 });

@@ -6,6 +6,9 @@ import type { Logger } from '../logger.js';
 import type {
   AccountRateLimitSnapshot,
   AppThread,
+  AppThreadTurn,
+  AppThreadTurnItem,
+  AppThreadWithTurns,
   CollaborationModeValue,
   CreditsSnapshot,
   ModelInfo,
@@ -153,6 +156,12 @@ export class CodexAppClient extends EventEmitter {
     const result = await this.request('thread/read', { threadId, includeTurns });
     const thread = (result as any).thread;
     return thread ? mapThread(thread) : null;
+  }
+
+  async readThreadWithTurns(threadId: string): Promise<AppThreadWithTurns | null> {
+    const result = await this.request('thread/read', { threadId, includeTurns: true });
+    const thread = (result as any).thread;
+    return thread ? mapThreadWithTurns(thread) : null;
   }
 
   async renameThread(threadId: string, name: string): Promise<void> {
@@ -464,6 +473,31 @@ function mapThread(raw: any): AppThread {
   };
 }
 
+function mapThreadWithTurns(raw: any): AppThreadWithTurns {
+  return {
+    ...mapThread(raw),
+    turns: Array.isArray(raw.turns) ? raw.turns.map(mapThreadTurn) : [],
+  };
+}
+
+function mapThreadTurn(raw: any): AppThreadTurn {
+  return {
+    id: String(raw?.id ?? ''),
+    status: extractStructuredString(raw?.status),
+    error: extractStructuredString(raw?.error),
+    items: Array.isArray(raw?.items) ? raw.items.map(mapThreadTurnItem) : [],
+  };
+}
+
+function mapThreadTurnItem(raw: any): AppThreadTurnItem {
+  return {
+    id: raw?.id ? String(raw.id) : null,
+    type: typeof raw?.type === 'string' ? raw.type : 'unknown',
+    phase: typeof raw?.phase === 'string' && raw.phase.trim() ? raw.phase : null,
+    text: extractStructuredText(raw),
+  };
+}
+
 function mapThreadStatus(raw: any): ThreadStatusKind {
   const type = raw?.type;
   if (type === 'active' || type === 'idle' || type === 'notLoaded' || type === 'systemError') {
@@ -518,6 +552,66 @@ function mapAccountRateLimitResponse(raw: any): AccountRateLimitSnapshot | null 
     : null;
   const codexRateLimit = byLimitId?.codex ?? raw.rateLimits ?? null;
   return mapRateLimitSnapshot(codexRateLimit);
+}
+
+function extractStructuredText(value: any): string | null {
+  const directText = extractTextCandidate(value?.text)
+    ?? extractTextCandidate(value?.content)
+    ?? extractTextCandidate(value?.message)
+    ?? extractTextCandidate(value?.value);
+  if (directText !== null) {
+    return directText;
+  }
+  return extractTextCandidate(value);
+}
+
+function extractStructuredString(value: any): string | null {
+  if (typeof value === 'string' && value.trim()) {
+    return value;
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = extractTextCandidate(value)
+    ?? extractTextCandidate(value?.message)
+    ?? extractTextCandidate(value?.error);
+  if (candidate !== null) {
+    return candidate;
+  }
+  const type = value?.type;
+  if (typeof type === 'string' && type.trim()) {
+    return type;
+  }
+  return null;
+}
+
+function extractTextCandidate(value: any): string | null {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  for (const key of ['text', 'delta', 'content', 'value', 'message']) {
+    const candidate = value[key];
+    if (typeof candidate === 'string') {
+      return candidate;
+    }
+  }
+  for (const key of ['parts', 'segments', 'content']) {
+    const candidate = value[key];
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+    const text = candidate
+      .map((entry) => extractTextCandidate(entry))
+      .filter((entry): entry is string => entry !== null)
+      .join('');
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }
 
 function mapRateLimitSnapshot(raw: any): AccountRateLimitSnapshot | null {

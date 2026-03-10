@@ -32,6 +32,14 @@ export interface ActiveTurnPreviewRecord {
   updatedAt: number;
 }
 
+export interface ThreadHistoryPreviewRecord {
+  scopeId: string;
+  threadId: string;
+  messageId: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface HistoricalCleanupOptions {
   maxResolvedAgeMs: number;
   maxResolvedPlanSessionsPerChat: number;
@@ -180,6 +188,13 @@ export class BridgeStore {
       CREATE TABLE IF NOT EXISTS active_turn_previews (
         turn_id TEXT PRIMARY KEY,
         scope_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        message_id INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS thread_history_previews (
+        scope_id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
         message_id INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
@@ -883,6 +898,38 @@ export class BridgeStore {
 
   removeActiveTurnPreviewByMessage(scopeId: string, messageId: number): void {
     this.db.prepare('DELETE FROM active_turn_previews WHERE scope_id = ? AND message_id = ?').run(scopeId, messageId);
+  }
+
+  saveThreadHistoryPreview(record: Pick<ThreadHistoryPreviewRecord, 'scopeId' | 'threadId' | 'messageId'>): void {
+    const now = Date.now();
+    this.db.prepare(`
+      INSERT INTO thread_history_previews (scope_id, thread_id, message_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(scope_id) DO UPDATE SET
+        thread_id = excluded.thread_id,
+        message_id = excluded.message_id,
+        updated_at = excluded.updated_at
+    `).run(record.scopeId, record.threadId, record.messageId, now, now);
+  }
+
+  getThreadHistoryPreview(scopeId: string): ThreadHistoryPreviewRecord | null {
+    const row = this.db.prepare(`
+      SELECT scope_id, thread_id, message_id, created_at, updated_at
+      FROM thread_history_previews
+      WHERE scope_id = ?
+    `).get(scopeId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      scopeId: String(row.scope_id),
+      threadId: String(row.thread_id),
+      messageId: Number(row.message_id),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+    };
+  }
+
+  removeThreadHistoryPreview(scopeId: string): void {
+    this.db.prepare('DELETE FROM thread_history_previews WHERE scope_id = ?').run(scopeId);
   }
 
   insertAudit(direction: 'inbound' | 'outbound', chatId: string, eventType: string, summary: string): void {

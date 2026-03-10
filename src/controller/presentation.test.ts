@@ -14,6 +14,7 @@ import {
   formatModeSettingsMessage,
   formatModelSettingsMessage,
   formatSettingsHomeMessage,
+  formatThreadHistoryPreviewMessage,
   formatSandboxModeLabel,
   formatThreadsMessage,
   normalizeRequestedEffort,
@@ -82,6 +83,32 @@ test('buildThreadsKeyboard creates open and rename buttons per thread', () => {
       callback_data: 'thread:rename:start:thread-2',
     },
   ]]);
+});
+
+test('formatThreadHistoryPreviewMessage renders compact recent turns', () => {
+  const rendered = formatThreadHistoryPreviewMessage('en', {
+    threadId: 'thread-2',
+    name: 'Fix bridge threading',
+    preview: 'Fallback preview',
+  }, [
+    {
+      userText: 'Please inspect why the old interrupt button stays visible',
+      assistantText: 'I traced it to the preview lifecycle and will replace the card on rebase.',
+      status: 'complete',
+    },
+    {
+      userText: 'Show me the latest three turns only',
+      assistantText: 'I found the history but the final answer was interrupted halfway through.',
+      status: 'partial',
+    },
+  ]);
+
+  assert.match(rendered, /<b>Recent context<\/b>/);
+  assert.match(rendered, /Switched to: <b>Fix bridge threading<\/b>/);
+  assert.match(rendered, /Thread: <code>thread-2<\/code>/);
+  assert.match(rendered, /<b>Turn 1<\/b>/);
+  assert.match(rendered, /You: Please inspect why the old interrupt button stays visible/);
+  assert.match(rendered, /Codex \(partial\): I found the history/);
 });
 
 test('formatModelSettingsMessage renders current selections', () => {

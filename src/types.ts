@@ -70,6 +70,24 @@ export interface AppThread {
   updatedAt: number;
 }
 
+export interface AppThreadTurnItem {
+  id: string | null;
+  type: string;
+  phase: string | null;
+  text: string | null;
+}
+
+export interface AppThreadTurn {
+  id: string;
+  status: string | null;
+  error: string | null;
+  items: AppThreadTurnItem[];
+}
+
+export interface AppThreadWithTurns extends AppThread {
+  turns: AppThreadTurn[];
+}
+
 export interface ThreadSessionState {
   thread: AppThread;
   model: string;

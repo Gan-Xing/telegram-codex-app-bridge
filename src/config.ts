@@ -18,6 +18,9 @@ export interface AppConfig {
   tgAllowedUserId: string;
   tgAllowedChatId: string | null;
   tgAllowedTopicId: number | null;
+  tgWebAppBaseUrl?: string | null;
+  webAppBindHost?: string;
+  webAppBindPort?: number;
   codexCliBin: string;
   codexAppAutolaunch: boolean;
   codexAppLaunchCmd: string;
@@ -44,6 +47,9 @@ export function loadConfig(): AppConfig {
     tgAllowedUserId: required('TG_ALLOWED_USER_ID'),
     tgAllowedChatId: optional('TG_ALLOWED_CHAT_ID'),
     tgAllowedTopicId: nullableIntEnv('TG_ALLOWED_TOPIC_ID'),
+    tgWebAppBaseUrl: optionalUrl('TG_WEBAPP_BASE_URL'),
+    webAppBindHost: process.env.WEBAPP_BIND_HOST || '127.0.0.1',
+    webAppBindPort: intEnv('WEBAPP_BIND_PORT', 8787),
     codexCliBin: process.env.CODEX_CLI_BIN || resolveCommand('codex') || 'codex',
     codexAppAutolaunch: boolEnv('CODEX_APP_AUTOLAUNCH', platform.os === 'darwin'),
     codexAppLaunchCmd: process.env.CODEX_APP_LAUNCH_CMD || '',
@@ -89,6 +95,21 @@ function optional(key: string): string | null {
   const value = process.env[key];
   if (!value || !value.trim()) return null;
   return value.trim();
+}
+
+function optionalUrl(key: string): string | null {
+  const value = optional(key);
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${key} must be a valid URL`);
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(`${key} must use http or https`);
+  }
+  return url.toString();
 }
 
 function intEnv(key: string, fallback: number): number {
