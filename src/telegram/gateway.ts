@@ -41,7 +41,6 @@ interface TelegramMessage {
   animation?: TelegramAnimation;
   sticker?: TelegramSticker;
   video_note?: TelegramVideoNote;
-  web_app_data?: TelegramWebAppData;
 }
 
 interface TelegramCallbackQuery {
@@ -66,22 +65,10 @@ interface SendMessageResult {
   message_id: number;
 }
 
-interface TelegramWebAppData {
-  button_text?: string;
-  data: string;
-}
-
 interface TelegramCallbackButton {
   text: string;
   callback_data: string;
 }
-
-interface TelegramWebAppButton {
-  text: string;
-  web_app: { url: string };
-}
-
-type TelegramInlineButton = TelegramCallbackButton | TelegramWebAppButton;
 
 export interface TelegramTextEvent {
   chatId: string;
@@ -105,17 +92,6 @@ export interface TelegramCallbackEvent {
   data: string;
   callbackQueryId: string;
   messageId: number;
-  languageCode?: string;
-}
-
-export interface TelegramWebAppEvent {
-  chatId: string;
-  topicId: number | null;
-  scopeId: string;
-  userId: string;
-  data: string;
-  messageId: number;
-  buttonText: string | null;
   languageCode?: string;
 }
 
@@ -171,22 +147,6 @@ export class TelegramGateway extends EventEmitter {
     return this.sendMessageWithOptions(chatId, text, inlineKeyboard, 'HTML', messageThreadId);
   }
 
-  async sendHtmlMessageWithWebAppButton(
-    chatId: string,
-    text: string,
-    buttonText: string,
-    url: string,
-    messageThreadId?: number | null,
-  ): Promise<number> {
-    return this.sendMessageWithOptions(
-      chatId,
-      text,
-      [[{ text: buttonText, web_app: { url } }]],
-      'HTML',
-      messageThreadId,
-    );
-  }
-
   async sendMessageDraft(
     chatId: string,
     draftId: number,
@@ -213,22 +173,6 @@ export class TelegramGateway extends EventEmitter {
     return this.editMessageWithOptions(chatId, messageId, text, inlineKeyboard, 'HTML');
   }
 
-  async editHtmlMessageWithWebAppButton(
-    chatId: string,
-    messageId: number,
-    text: string,
-    buttonText: string,
-    url: string,
-  ): Promise<void> {
-    return this.editMessageWithOptions(
-      chatId,
-      messageId,
-      text,
-      [[{ text: buttonText, web_app: { url } }]],
-      'HTML',
-    );
-  }
-
   async clearMessageInlineKeyboard(chatId: string, messageId: number): Promise<void> {
     const result = await callTelegramApi(this.botToken, 'editMessageReplyMarkup', {
       chat_id: chatId,
@@ -243,7 +187,7 @@ export class TelegramGateway extends EventEmitter {
   private async sendMessageWithOptions(
     chatId: string,
     text: string,
-    inlineKeyboard?: Array<Array<TelegramInlineButton>>,
+    inlineKeyboard?: Array<Array<TelegramCallbackButton>>,
     parseMode?: 'HTML',
     messageThreadId?: number | null,
   ): Promise<number> {
@@ -265,7 +209,7 @@ export class TelegramGateway extends EventEmitter {
     chatId: string,
     messageId: number,
     text: string,
-    inlineKeyboard?: Array<Array<TelegramInlineButton>>,
+    inlineKeyboard?: Array<Array<TelegramCallbackButton>>,
     parseMode?: 'HTML',
   ): Promise<void> {
     const result = await callTelegramApi(this.botToken, 'editMessageText', {
@@ -378,20 +322,6 @@ export class TelegramGateway extends EventEmitter {
       const scopeId = createTelegramScopeId(String(update.message.chat.id), topicId);
       const entities = update.message.text ? (update.message.entities ?? []) : (update.message.caption_entities ?? []);
       const replyToBot = this.botUserId !== null && update.message.reply_to_message?.from?.id === this.botUserId;
-      const webAppData = update.message.web_app_data?.data ?? '';
-      if (webAppData.trim()) {
-        this.emit('webapp', {
-          chatId: String(update.message.chat.id),
-          topicId,
-          scopeId,
-          userId: String(update.message.from.id),
-          data: webAppData,
-          messageId: update.message.message_id,
-          buttonText: update.message.web_app_data?.button_text?.trim() || null,
-          ...(update.message.from.language_code ? { languageCode: update.message.from.language_code } : {}),
-        } satisfies TelegramWebAppEvent);
-        return;
-      }
       if (text || attachments.length > 0) {
         this.emit('text', {
           chatId: String(update.message.chat.id),

@@ -50,7 +50,7 @@ import {
   resolveRequestedModel,
   type ThreadHistoryPreviewTurn,
 } from './presentation.js';
-import type { TelegramGateway, TelegramTextEvent, TelegramCallbackEvent, TelegramWebAppEvent } from '../telegram/gateway.js';
+import type { TelegramGateway, TelegramTextEvent, TelegramCallbackEvent } from '../telegram/gateway.js';
 import {
   TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES,
   buildAttachmentPrompt,
@@ -128,18 +128,6 @@ interface ThreadRenameDraft {
   proposedName: string | null;
   promptMessageId: number;
   createdAt: number;
-}
-
-interface ThreadsWebAppPayload {
-  v: 1;
-  kind: 'threads-panel';
-  locale: AppLocale;
-  currentThreadId: string | null;
-  threads: Array<{
-    threadId: string;
-    title: string;
-    isCurrent: boolean;
-  }>;
 }
 
 interface ActiveTurn {
@@ -224,7 +212,6 @@ const PLAN_MODE_RECOVERY_DRAFT_PROMPT = [
 const PLAN_RENDER_DEBOUNCE_MS = 250;
 const HISTORY_RETENTION_MS = 1000 * 60 * 60 * 24 * 30;
 const MAX_RESOLVED_PLAN_SESSIONS_PER_CHAT = 20;
-const THREADS_WEBAPP_ACTION_VERSION = 1;
 const THREAD_HISTORY_PREVIEW_TURN_LIMIT = 3;
 
 export class BridgeController {
@@ -253,11 +240,6 @@ export class BridgeController {
     this.bot.on('callback', (event: TelegramCallbackEvent) => {
       void this.withLock(event.scopeId, async () => this.handleCallback(event)).catch((error) => {
         void this.handleAsyncError('telegram.callback', error, event.scopeId);
-      });
-    });
-    this.bot.on('webapp', (event: TelegramWebAppEvent) => {
-      void this.withLock(event.scopeId, async () => this.handleWebApp(event)).catch((error) => {
-        void this.handleAsyncError('telegram.webapp', error, event.scopeId);
       });
     });
     this.app.on('notification', (msg: JsonRpcNotification) => {
@@ -724,26 +706,6 @@ export class BridgeController {
       await this.editMessage(scopeId, approval.messageId, renderApprovalMessage(locale, approval, action));
     }
     this.updateStatus();
-  }
-
-  private async handleWebApp(event: TelegramWebAppEvent): Promise<void> {
-    const scopeId = event.scopeId;
-    const locale = this.localeForChat(scopeId, event.languageCode);
-    const action = parseThreadsWebAppAction(event.data);
-    if (!action) {
-      await this.sendMessage(scopeId, t(locale, 'threads_panel_invalid_action'));
-      return;
-    }
-
-    if (action.action === 'open') {
-      await this.openThreadFromWebApp(scopeId, action.threadId, locale);
-      return;
-    }
-
-    const started = await this.startThreadRenameDraft(scopeId, action.threadId, locale);
-    if (!started) {
-      await this.sendMessage(scopeId, t(locale, 'thread_no_longer_available'));
-    }
   }
 
   private async handleNotification(notification: JsonRpcNotification): Promise<void> {
@@ -1942,16 +1904,6 @@ export class BridgeController {
     return this.bot.sendHtmlMessage(target.chatId, text, inlineKeyboard, target.topicId);
   }
 
-  private async sendHtmlMessageWithWebAppButton(
-    scopeId: string,
-    text: string,
-    buttonText: string,
-    url: string,
-  ): Promise<number> {
-    const target = parseTelegramScopeId(scopeId);
-    return this.bot.sendHtmlMessageWithWebAppButton(target.chatId, text, buttonText, url, target.topicId);
-  }
-
   private async editMessage(
     scopeId: string,
     messageId: number,
@@ -1970,17 +1922,6 @@ export class BridgeController {
   ): Promise<void> {
     const target = parseTelegramScopeId(scopeId);
     await this.bot.editHtmlMessage(target.chatId, messageId, text, inlineKeyboard);
-  }
-
-  private async editHtmlMessageWithWebAppButton(
-    scopeId: string,
-    messageId: number,
-    text: string,
-    buttonText: string,
-    url: string,
-  ): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.editHtmlMessageWithWebAppButton(target.chatId, messageId, text, buttonText, url);
   }
 
   private async deleteMessage(scopeId: string, messageId: number): Promise<void> {
@@ -2525,35 +2466,6 @@ export class BridgeController {
     await this.renderThreadHistoryPreview(scopeId, binding.threadId, locale);
   }
 
-  private async openThreadFromWebApp(scopeId: string, threadId: string, locale: AppLocale): Promise<void> {
-    let binding: ThreadBinding;
-    try {
-      binding = await this.bindCachedThread(scopeId, threadId);
-    } catch (error) {
-      if (isThreadNotFoundError(error)) {
-        await this.sendMessage(scopeId, t(locale, 'thread_no_longer_available'));
-        return;
-      }
-      throw error;
-    }
-
-    const cached = this.store.listCachedThreads(scopeId).find((thread) => thread.threadId === binding.threadId) ?? null;
-    const settings = this.store.getChatSettings(scopeId);
-    const lines = [
-      t(locale, 'bound_to_thread', { threadId: binding.threadId }),
-      t(locale, 'line_title', { value: cached?.name || cached?.preview || t(locale, 'empty') }),
-      t(locale, 'status_configured_model', { value: settings?.model ?? t(locale, 'server_default') }),
-      t(locale, 'status_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }),
-      t(locale, 'line_cwd', { value: binding.cwd ?? this.config.defaultCwd }),
-    ];
-    if (this.config.codexAppSyncOnOpen) {
-      const revealError = await this.tryRevealThread(scopeId, binding.threadId, 'open');
-      lines.push(revealError ? t(locale, 'codex_sync_failed', { error: revealError }) : t(locale, 'opened_in_codex'));
-    }
-    await this.sendMessage(scopeId, lines.join('\n'));
-    await this.renderThreadHistoryPreview(scopeId, binding.threadId, locale);
-  }
-
   private async renderThreadHistoryPreview(scopeId: string, threadId: string, locale: AppLocale): Promise<void> {
     try {
       const thread = await this.app.readThreadWithTurns(threadId);
@@ -2580,23 +2492,8 @@ export class BridgeController {
   }
 
   private async upsertThreadHistoryPreview(scopeId: string, threadId: string, text: string): Promise<void> {
-    const existing = this.store.getThreadHistoryPreview(scopeId);
-    if (!existing) {
-      const messageId = await this.sendHtmlMessage(scopeId, text);
-      this.store.saveThreadHistoryPreview({ scopeId, threadId, messageId });
-      return;
-    }
-    try {
-      await this.editHtmlMessage(scopeId, existing.messageId, text);
-      this.store.saveThreadHistoryPreview({ scopeId, threadId, messageId: existing.messageId });
-    } catch (error) {
-      if (isTelegramMessageGone(error)) {
-        this.store.removeThreadHistoryPreview(scopeId);
-        await this.upsertThreadHistoryPreview(scopeId, threadId, text);
-        return;
-      }
-      throw error;
-    }
+    const messageId = await this.sendHtmlMessage(scopeId, text);
+    this.store.saveThreadHistoryPreview({ scopeId, threadId, messageId });
   }
 
   private async handleThreadRenameCallback(
@@ -2870,60 +2767,12 @@ export class BridgeController {
     }));
     this.store.cacheThreadList(scopeId, cached);
     const text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null);
-    const webAppUrl = this.buildThreadsWebAppUrl(scopeId, locale, cached, binding?.threadId ?? null);
-    if (webAppUrl) {
-      const buttonText = t(locale, 'button_threads_panel');
-      if (messageId !== undefined) {
-        await this.editHtmlMessageWithWebAppButton(scopeId, messageId, text, buttonText, webAppUrl);
-        return;
-      }
-      await this.sendHtmlMessageWithWebAppButton(scopeId, text, buttonText, webAppUrl);
-      return;
-    }
     const keyboard = buildThreadsKeyboard(locale, cached);
     if (messageId !== undefined) {
       await this.editHtmlMessage(scopeId, messageId, text, keyboard);
       return;
     }
     await this.sendHtmlMessage(scopeId, text, keyboard);
-  }
-
-  private buildThreadsWebAppUrl(
-    scopeId: string,
-    locale: AppLocale,
-    threads: Array<{ threadId: string; name: string | null; preview: string }>,
-    currentThreadId: string | null,
-  ): string | null {
-    const baseUrlRaw = this.config.tgWebAppBaseUrl ?? null;
-    if (!baseUrlRaw) return null;
-
-    let baseUrl: URL;
-    try {
-      const normalizedBase = baseUrlRaw.endsWith('/') ? baseUrlRaw : `${baseUrlRaw}/`;
-      baseUrl = new URL(normalizedBase);
-    } catch {
-      this.logger.warn('threads.webapp_base_url_invalid', { scopeId, baseUrlRaw });
-      return null;
-    }
-
-    const payload: ThreadsWebAppPayload = {
-      v: 1,
-      kind: 'threads-panel',
-      locale,
-      currentThreadId,
-      threads: threads.map((thread, index) => {
-        const titleBase = thread.name || thread.preview || t(locale, 'empty');
-        return {
-          threadId: thread.threadId,
-          title: `${index + 1}. ${truncateInline(normalizeThreadRenameLabel(titleBase), 80)}`,
-          isCurrent: currentThreadId === thread.threadId,
-        };
-      }),
-    };
-
-    const url = new URL('webapp/threads', baseUrl);
-    url.searchParams.set('payload', encodeBase64UrlJson(payload));
-    return url.toString();
   }
 
   private async showModelSettingsPanel(scopeId: string, messageId?: number, locale = this.localeForChat(scopeId)): Promise<void> {
@@ -5059,27 +4908,6 @@ function mapApprovalDecision(action: ApprovalAction): unknown {
   return { decision };
 }
 
-function encodeBase64UrlJson(value: unknown): string {
-  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
-}
-
-function parseThreadsWebAppAction(raw: string): { action: 'open' | 'rename_start'; threadId: string } | null {
-  let parsed: any;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  if (Number(parsed.v) !== THREADS_WEBAPP_ACTION_VERSION) return null;
-  if (parsed.kind !== 'threads-panel') return null;
-  const action = parsed.action === 'open' || parsed.action === 'rename_start' ? parsed.action : null;
-  if (!action) return null;
-  const threadId = typeof parsed.threadId === 'string' ? parsed.threadId.trim() : '';
-  if (!threadId) return null;
-  return { action, threadId };
-}
-
 function buildThreadHistoryPreviewTurns(
   turns: AppThreadWithTurns['turns'],
   limit: number,
@@ -5095,12 +4923,12 @@ function buildThreadHistoryPreviewTurns(
 }
 
 function normalizeThreadHistoryPreviewTurn(turn: AppThreadTurn): ThreadHistoryPreviewTurn | null {
-  const userText = joinThreadTurnTexts(turn.items, isUserThreadTurnItem);
+  const userText = findLastThreadTurnText(turn.items, isUserThreadTurnItem);
   const finalAssistantText = findLastThreadTurnText(turn.items, (item) => (
     isAssistantThreadTurnItem(item) && classifyAgentOutput(item.phase, true) === 'final_answer'
   ));
   const fallbackAssistantText = findLastThreadTurnText(turn.items, isAssistantThreadTurnItem);
-  const assistantText = finalAssistantText ?? fallbackAssistantText ?? normalizeThreadHistoryText(turn.error);
+  const assistantText = finalAssistantText ?? fallbackAssistantText ?? sanitizeThreadHistoryPreviewText(turn.error);
   if (!userText && !assistantText) {
     return null;
   }
@@ -5140,20 +4968,6 @@ function classifyThreadHistoryPreviewStatus(
   return 'failed';
 }
 
-function joinThreadTurnTexts(
-  items: AppThreadTurnItem[],
-  predicate: (item: AppThreadTurnItem) => boolean,
-): string | null {
-  const parts = items
-    .filter(predicate)
-    .map((item) => normalizeThreadHistoryText(item.text))
-    .filter((value): value is string => value !== null);
-  if (parts.length === 0) {
-    return null;
-  }
-  return parts.join('\n\n');
-}
-
 function findLastThreadTurnText(
   items: AppThreadTurnItem[],
   predicate: (item: AppThreadTurnItem) => boolean,
@@ -5163,7 +4977,7 @@ function findLastThreadTurnText(
     if (!item || !predicate(item)) {
       continue;
     }
-    const text = normalizeThreadHistoryText(item.text);
+    const text = sanitizeThreadHistoryPreviewText(item.text);
     if (text) {
       return text;
     }
@@ -5184,12 +4998,70 @@ function normalizeThreadTurnItemType(value: string): string {
   return value.replace(/[^a-z]/gi, '').toLowerCase();
 }
 
+function sanitizeThreadHistoryPreviewText(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalizedValue = value.replace(/\r\n?/g, '\n').trim();
+  if (!normalizedValue) {
+    return null;
+  }
+  const lines = normalizedValue
+    .split('\n')
+    .map((line) => normalizeThreadHistoryText(stripTelegramHtml(line)))
+    .filter((line): line is string => line !== null);
+  if (lines.length === 0) {
+    return null;
+  }
+  const hasPreviewShell = lines.some((line) => isThreadHistoryPreviewShellLine(line));
+  const filteredLines = hasPreviewShell
+    ? lines.filter((line) => !isThreadHistoryPreviewShellLine(line) && !isThreadHistoryPreviewSpeakerLine(line))
+    : lines;
+  if (filteredLines.length === 0) {
+    return hasPreviewShell ? null : normalizeThreadHistoryText(normalizedValue);
+  }
+  return normalizeThreadHistoryText(filteredLines.join('\n\n'));
+}
+
 function normalizeThreadHistoryText(value: string | null): string | null {
   if (!value) {
     return null;
   }
   const normalized = value.replace(/\s+/g, ' ').trim();
   return normalized ? normalized : null;
+}
+
+function stripTelegramHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, ' ');
+}
+
+function isThreadHistoryPreviewShellLine(value: string): boolean {
+  const normalized = normalizeHistoryPreviewLine(value);
+  return normalized === 'recent context'
+    || normalized === '最近会话'
+    || normalized === 'recent turns'
+    || normalized === 'recent turns:'
+    || normalized === '最近几轮'
+    || normalized === '最近几轮:'
+    || normalized === '最近几轮：'
+    || normalized.startsWith('switched to:')
+    || normalized.startsWith('已切换到:')
+    || normalized.startsWith('已切换到：')
+    || normalized.startsWith('thread:')
+    || normalized.startsWith('线程:')
+    || normalized.startsWith('线程：')
+    || /^turn \d+$/.test(normalized)
+    || /^第 ?\d+ ?轮$/.test(normalized);
+}
+
+function isThreadHistoryPreviewSpeakerLine(value: string): boolean {
+  const normalized = normalizeHistoryPreviewLine(value);
+  return /^(you|你)\s*[:：]/.test(normalized)
+    || /^codex(?:\s*[（(][^）)]*[）)])?\s*[:：]/.test(normalized);
+}
+
+function normalizeHistoryPreviewLine(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 function normalizeHistoryStatus(value: string | null): string {

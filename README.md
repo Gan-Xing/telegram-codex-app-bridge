@@ -7,7 +7,6 @@ Use a Telegram bot to control a local Codex host through `codex app-server`.
 - Telegram private chat or topic-aware group control for a single allowed user
 - Local `codex app-server` transport over loopback WebSocket
 - Sticky chat-to-thread binding with `/threads`, `/open`, `/new`, `/where`, `/interrupt`
-- Optional Telegram WebApp thread panel with fixed `70/30` Open/Rename button layout
 - Chat-scoped model and reasoning-effort control with `/models` and optional `/model`/`/effort` aliases
 - Chat-scoped conversation mode control with `/mode` and optional `/plan` alias
 - Chat-scoped access presets with `/permissions` and optional `/access` alias
@@ -130,9 +129,6 @@ TG_BOT_TOKEN=123456:telegram-token
 TG_ALLOWED_USER_ID=123456789
 TG_ALLOWED_CHAT_ID=
 TG_ALLOWED_TOPIC_ID=
-TG_WEBAPP_BASE_URL=
-WEBAPP_BIND_HOST=127.0.0.1
-WEBAPP_BIND_PORT=8787
 CODEX_APP_AUTOLAUNCH=false
 CODEX_APP_LAUNCH_CMD=
 CODEX_APP_SYNC_ON_OPEN=true
@@ -157,12 +153,6 @@ If multiple bots share one group, each bot should use:
 - A different `TG_ALLOWED_TOPIC_ID`
 
 Without `TG_ALLOWED_TOPIC_ID`, every bot in the same group treats the whole group as its default scope.
-
-Optional WebApp threads panel:
-
-- Set `TG_WEBAPP_BASE_URL` to the public base URL that Telegram clients can reach.
-- The bridge serves the panel at `/webapp/threads` on `WEBAPP_BIND_HOST:WEBAPP_BIND_PORT`.
-- Typical deployment: reverse proxy `https://your-domain/...` to the local WebApp server.
 
 ## Commands
 
