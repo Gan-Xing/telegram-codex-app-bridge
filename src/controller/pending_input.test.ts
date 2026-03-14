@@ -154,15 +154,26 @@ test('renderPlanConfirmationMessage offers continue as the recommended option', 
   assert.match(rendered.html, /Review this plan/);
   assert.match(rendered.html, /Plan version: 3/);
   assert.match(rendered.html, /Execution was blocked because planning tried to move past review before you confirmed\./);
-  assert.equal(rendered.keyboard[0]?.[0]?.text, 'Recommended: Continue');
+  assert.equal(rendered.keyboard[0]?.[0]?.text, 'Recommended: Confirm & execute');
   assert.equal(rendered.keyboard[1]?.[0]?.text, 'Revise');
   assert.equal(rendered.keyboard[1]?.[1]?.text, 'Cancel');
 });
 
-test('renderPlanConfirmationMessage hides continue when there is no reviewable plan yet', () => {
+test('renderPlanConfirmationMessage still allows confirmation when only the visible plan card exists', () => {
   const rendered = renderPlanConfirmationMessage('zh', {
     ...makePlanSession(),
     latestPlanVersion: null,
+  });
+
+  assert.match(rendered.html, /可以直接确认并执行/);
+  assert.equal(rendered.keyboard[0]?.[0]?.text, '推荐: 确认并执行');
+});
+
+test('renderPlanConfirmationMessage hides confirm when no plan was rendered at all', () => {
+  const rendered = renderPlanConfirmationMessage('zh', {
+    ...makePlanSession(),
+    latestPlanVersion: null,
+    lastPlanMessageId: null,
   });
 
   assert.match(rendered.html, /当前还没有可确认的结构化计划/);
@@ -174,5 +185,5 @@ test('renderResolvedPlanConfirmationMessage summarizes the recorded decision', (
   const html = renderResolvedPlanConfirmationMessage('en', makePlanSession(), 'confirm');
 
   assert.match(html, /Plan decision recorded/);
-  assert.match(html, /Decision: Continue with this plan/);
+  assert.match(html, /Decision: Confirm and execute this plan/);
 });

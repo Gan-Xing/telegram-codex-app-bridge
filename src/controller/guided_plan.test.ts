@@ -163,6 +163,29 @@ test('plan confirmation callback starts an execution turn on the same session', 
   });
 });
 
+test('plan confirmation callback can execute from a visible plan card without a structured snapshot', async () => {
+  await withComposition(async (composition, store, bot, app) => {
+    store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');
+    store.setChatCollaborationMode('chat-1', 'plan');
+    store.setBinding('chat-1', 'thread-1', '/tmp/demo');
+    store.savePlanSession({
+      ...makePlanSession(),
+      latestPlanVersion: null,
+    });
+    composition.attachedThreads.add('thread-1');
+
+    await composition.guidedPlans.handlePlanSessionCallback(makeCallbackEvent(), 'session-1', 'confirm', 'en');
+
+    const session = store.getPlanSession('session-1');
+    assert.equal(session?.state, 'executing_confirmed_plan');
+    assert.equal(session?.executionTurnId, 'turn-1');
+    assert.equal(session?.confirmedPlanVersion, null);
+    assert.equal(bot.answered.at(-1), 'Execution started');
+    assert.match(bot.edits.at(-1)?.text ?? '', /Confirm and execute this plan/);
+    assert.match(app.startTurnCalls[0]?.developerInstructions ?? '', /The user confirmed the latest plan\./);
+  });
+});
+
 test('plan confirmation callback cancels the pending session without starting a turn', async () => {
   await withComposition(async (composition, store, bot, app) => {
     store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');
@@ -207,6 +230,9 @@ test('plan notifications persist semantic snapshots and stream draft deltas into
       draftText: null,
       buffer: '',
       finalText: null,
+      completionState: 'completed',
+      completionStatusText: null,
+      completionErrorText: null,
       interruptRequested: false,
       statusMessageText: null,
       statusNeedsRebase: false,

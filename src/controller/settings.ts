@@ -20,6 +20,7 @@ import {
   formatServiceTierLabel,
   formatSettingsHomeMessage,
   formatSandboxModeLabel,
+  formatTelegramScopeLabel,
   formatWhereMessage,
   normalizeRequestedEffort,
   normalizeRequestedServiceTier,
@@ -73,30 +74,43 @@ export class SettingsCoordinator {
       await this.showModeSettingsPanel(scopeId, undefined, locale);
       return;
     }
-    this.host.store.setChatCollaborationMode(scopeId, nextMode);
-    if (nextMode !== 'plan') {
-      await this.host.clearPendingUserInputsIfNeeded(scopeId, locale);
+    const clearedPlanSessions = await this.applyCollaborationMode(scopeId, nextMode, locale);
+    const lines = [
+      t(locale, 'callback_mode', {
+        value: formatCollaborationModeLabel(locale, nextMode),
+      }),
+      t(locale, 'line_scope', { value: formatTelegramScopeLabel(locale, scopeId) }),
+    ];
+    if (clearedPlanSessions > 0) {
+      lines.push(t(locale, 'mode_pending_plans_cleared', { value: clearedPlanSessions }));
     }
-    await this.host.messages.sendMessage(scopeId, t(locale, 'callback_mode', {
-      value: formatCollaborationModeLabel(locale, nextMode),
-    }));
+    await this.host.messages.sendMessage(scopeId, lines.join('\n'));
   }
 
   async handlePlanAliasCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
     const normalized = args.join(' ').trim().toLowerCase();
     if (!normalized || normalized === 'on' || normalized === 'enable' || normalized === 'enabled') {
-      this.host.store.setChatCollaborationMode(event.scopeId, 'plan');
-      await this.host.messages.sendMessage(event.scopeId, t(locale, 'callback_mode', {
-        value: formatCollaborationModeLabel(locale, 'plan'),
-      }));
+      await this.applyCollaborationMode(event.scopeId, 'plan', locale);
+      await this.host.messages.sendMessage(event.scopeId, [
+        t(locale, 'callback_mode', {
+          value: formatCollaborationModeLabel(locale, 'plan'),
+        }),
+        t(locale, 'line_scope', { value: formatTelegramScopeLabel(locale, event.scopeId) }),
+      ].join('\n'));
       return;
     }
     if (normalized === 'off' || normalized === 'disable' || normalized === 'disabled' || normalized === 'default') {
-      this.host.store.setChatCollaborationMode(event.scopeId, 'default');
-      await this.host.clearPendingUserInputsIfNeeded(event.scopeId, locale);
-      await this.host.messages.sendMessage(event.scopeId, t(locale, 'callback_mode', {
-        value: formatCollaborationModeLabel(locale, 'default'),
-      }));
+      const clearedPlanSessions = await this.applyCollaborationMode(event.scopeId, null, locale);
+      const lines = [
+        t(locale, 'callback_mode', {
+          value: formatCollaborationModeLabel(locale, null),
+        }),
+        t(locale, 'line_scope', { value: formatTelegramScopeLabel(locale, event.scopeId) }),
+      ];
+      if (clearedPlanSessions > 0) {
+        lines.push(t(locale, 'mode_pending_plans_cleared', { value: clearedPlanSessions }));
+      }
+      await this.host.messages.sendMessage(event.scopeId, lines.join('\n'));
       return;
     }
     await this.showModeSettingsPanel(event.scopeId, undefined, locale);
@@ -432,7 +446,7 @@ export class SettingsCoordinator {
 
   async showModeSettingsPanel(scopeId: string, messageId?: number, locale = this.host.localeForChat(scopeId)): Promise<void> {
     const settings = this.host.store.getChatSettings(scopeId);
-    const text = formatModeSettingsMessage(locale, settings);
+    const text = formatModeSettingsMessage(locale, scopeId, settings);
     const keyboard = buildModeSettingsKeyboard(locale, settings);
     if (messageId !== undefined) {
       await this.host.messages.editHtmlMessage(scopeId, messageId, text, keyboard);
@@ -457,6 +471,7 @@ export class SettingsCoordinator {
     const settings = this.host.store.getChatSettings(scopeId);
     const access = this.resolveEffectiveAccess(scopeId, settings);
     const text = formatSettingsHomeMessage(locale, {
+      scopeId,
       threadId: binding?.threadId ?? null,
       cwd: binding?.cwd ?? this.host.config.defaultCwd,
       settings,
@@ -491,10 +506,7 @@ export class SettingsCoordinator {
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
       return;
     }
-    this.host.store.setChatCollaborationMode(event.scopeId, nextMode);
-    if (nextMode !== 'plan') {
-      await this.host.clearPendingUserInputsIfNeeded(event.scopeId, locale);
-    }
+    await this.applyCollaborationMode(event.scopeId, nextMode, locale);
     await this.refreshModeSettingsPanel(event.scopeId, event.messageId, locale);
     await this.host.answerCallback(event.callbackQueryId, t(locale, 'callback_mode', {
       value: formatCollaborationModeLabel(locale, nextMode),
@@ -528,9 +540,24 @@ export class SettingsCoordinator {
     await this.host.messages.editHtmlMessage(
       scopeId,
       messageId,
-      formatModeSettingsMessage(locale, settings),
+      formatModeSettingsMessage(locale, scopeId, settings),
       buildModeSettingsKeyboard(locale, settings),
     );
+  }
+
+  private async applyCollaborationMode(scopeId: string, nextMode: 'default' | 'plan' | null, locale: AppLocale): Promise<number> {
+    const normalizedMode = nextMode === 'plan' ? 'plan' : null;
+    this.host.store.setChatCollaborationMode(scopeId, normalizedMode);
+    if (normalizedMode === 'plan') {
+      return 0;
+    }
+    const clearedPlanSessions = this.host.store.cancelOpenPlanSessions(scopeId, [
+      'drafting_plan',
+      'awaiting_plan_confirmation',
+      'recovery_required',
+    ]);
+    await this.host.clearPendingUserInputsIfNeeded(scopeId, locale);
+    return clearedPlanSessions;
   }
 
   private async refreshAccessSettingsPanel(scopeId: string, messageId: number, locale: AppLocale): Promise<void> {

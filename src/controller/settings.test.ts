@@ -151,6 +151,51 @@ test('settings callback updates service tier inside the model settings panel', a
   });
 });
 
+test('mode callback clears pending guided-plan prompts and shows the current scope', async () => {
+  await withComposition(async (composition, store, bot) => {
+    store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');
+    store.setChatCollaborationMode('chat-1', 'plan');
+    store.savePlanSession({
+      sessionId: 'session-1',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      sourceTurnId: 'turn-1',
+      executionTurnId: null,
+      state: 'awaiting_plan_confirmation',
+      confirmationRequired: true,
+      confirmedPlanVersion: null,
+      latestPlanVersion: 1,
+      currentPromptId: 'prompt-1',
+      currentApprovalId: null,
+      queueDepth: 0,
+      lastPlanMessageId: 10,
+      lastPromptMessageId: 77,
+      lastApprovalMessageId: null,
+      createdAt: 1000,
+      updatedAt: 1001,
+      resolvedAt: null,
+    });
+
+    await composition.telegramRouter.handleCallback(makeCallback('settings:mode:default'));
+
+    assert.equal(store.getChatSettings('chat-1')?.collaborationMode, null);
+    assert.equal(store.getPlanSession('session-1')?.state, 'cancelled');
+    assert.match(bot.edits[0]?.text ?? '', /Scope: chat-1 \/ root/);
+    assert.match(bot.answers[0] ?? '', /Mode: Default/);
+  });
+});
+
+test('/plan off resets mode to default instead of storing a separate mode value', async () => {
+  await withComposition(async (composition, store, bot) => {
+    store.setChatCollaborationMode('chat-1', 'plan');
+
+    await composition.telegramRouter.handleCommand({ scopeId: 'chat-1' } as any, 'en', 'plan', ['off']);
+
+    assert.equal(store.getChatSettings('chat-1')?.collaborationMode, null);
+    assert.match(bot.messages.at(-1) ?? '', /Scope: chat-1 \/ root/);
+  });
+});
+
 test('/fast sets service tier for the next turn', async () => {
   await withComposition(async (composition, store, bot) => {
     store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');

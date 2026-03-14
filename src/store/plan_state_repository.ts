@@ -80,6 +80,22 @@ export class PlanStateRepository {
     `).run(state, resolvedAt, Date.now(), sessionId);
   }
 
+  cancelOpenPlanSessions(chatId: string, states: GuidedPlanSessionState[]): number {
+    if (states.length === 0) {
+      return 0;
+    }
+    const placeholders = states.map(() => '?').join(', ');
+    const resolvedAt = Date.now();
+    const result = this.db.prepare(`
+      UPDATE plan_sessions
+      SET state = ?, resolved_at = ?, updated_at = ?
+      WHERE chat_id = ?
+        AND resolved_at IS NULL
+        AND state IN (${placeholders})
+    `).run('cancelled', resolvedAt, resolvedAt, chatId, ...states);
+    return Number(result.changes ?? 0);
+  }
+
   savePlanSnapshot(record: PlanSnapshotRecord): void {
     this.db.prepare(`
       INSERT INTO plan_snapshots (session_id, version, source_event, explanation, steps_json, created_at)

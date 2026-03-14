@@ -321,7 +321,7 @@ export class GuidedPlanCoordinator {
       await this.host.maybeStartQueuedTurn(event.scopeId);
       return;
     }
-    if (action === 'confirm' && session.latestPlanVersion === null) {
+    if (action === 'confirm' && !canConfirmPlanSession(session)) {
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'plan_action_unavailable'));
       return;
     }
@@ -440,6 +440,20 @@ export class GuidedPlanCoordinator {
     }
     const session = this.host.store.getPlanSession(active.guidedPlanSessionId);
     if (!session) {
+      return;
+    }
+    if (session.resolvedAt !== null || session.state === 'cancelled') {
+      this.host.updateStatus();
+      return;
+    }
+    const currentMode = this.host.store.getChatSettings(active.scopeId)?.collaborationMode ?? null;
+    if (active.guidedPlanDraftOnly && currentMode !== 'plan') {
+      this.updateSession(session.sessionId, {
+        state: 'cancelled',
+        currentPromptId: null,
+        resolvedAt: Date.now(),
+      });
+      this.host.updateStatus();
       return;
     }
     if (active.guidedPlanDraftOnly) {
@@ -645,7 +659,7 @@ function planConfirmationKeyboard(
   const rows: InlineKeyboard = [];
   if (canConfirm) {
     rows.push([{
-      text: truncateInline(`${t(locale, 'button_recommended')}: ${t(locale, 'button_continue')}`, 32),
+      text: truncateInline(`${t(locale, 'button_recommended')}: ${t(locale, 'button_confirm_execute')}`, 32),
       callback_data: `plan:${sessionId}:confirm`,
     }]);
   }
@@ -720,7 +734,7 @@ export function renderPlanConfirmationMessage(
   session: GuidedPlanSession,
   options: { blockedExecution?: boolean } = {},
 ): { html: string; keyboard: InlineKeyboard } {
-  const hasReviewablePlan = session.latestPlanVersion !== null;
+  const hasReviewablePlan = canConfirmPlanSession(session);
   const lines = [
     t(locale, 'plan_ready_for_review'),
     t(locale, 'line_thread', { value: escapeTelegramHtml(session.threadId) }),
@@ -734,12 +748,20 @@ export function renderPlanConfirmationMessage(
   if (options.blockedExecution) {
     lines.push(t(locale, 'plan_review_blocked_execution'));
   }
-  lines.push(t(locale, hasReviewablePlan ? 'plan_review_prompt' : 'plan_review_prompt_no_snapshot'));
+  lines.push(t(locale, session.latestPlanVersion !== null
+    ? 'plan_review_prompt'
+    : hasReviewablePlan
+      ? 'plan_review_prompt_visible_plan'
+      : 'plan_review_prompt_no_snapshot'));
   lines.push(t(locale, hasReviewablePlan ? 'plan_review_actions' : 'plan_review_actions_revise_only'));
   return {
     html: lines.filter(Boolean).join('\n'),
     keyboard: planConfirmationKeyboard(locale, session.sessionId, hasReviewablePlan),
   };
+}
+
+function canConfirmPlanSession(session: GuidedPlanSession): boolean {
+  return session.latestPlanVersion !== null || session.lastPlanMessageId !== null;
 }
 
 export function renderResolvedPlanConfirmationMessage(

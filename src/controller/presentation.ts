@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { t } from '../i18n.js';
+import { parseTelegramScopeId } from '../telegram/scope.js';
 import type {
   AccessPresetValue,
   AppLocale,
@@ -143,6 +144,7 @@ export function formatAccessSettingsMessage(locale: AppLocale, access: ResolvedA
 export function formatSettingsHomeMessage(
   locale: AppLocale,
   state: {
+    scopeId: string;
     threadId: string | null;
     cwd: string | null;
     settings: ChatSessionSettings | null;
@@ -155,6 +157,7 @@ export function formatSettingsHomeMessage(
     t(locale, 'settings_home_title'),
     t(locale, 'settings_home_hint'),
     '',
+    t(locale, 'line_scope', { value: escapeTelegramHtml(formatTelegramScopeLabel(locale, state.scopeId)) }),
     t(locale, 'settings_current_thread', { value: escapeTelegramHtml(state.threadId ?? t(locale, 'none')) }),
     t(locale, 'line_cwd', { value: escapeTelegramHtml(state.cwd ?? t(locale, 'no_cwd')) }),
     state.activeTurnId ? t(locale, 'settings_active_turn', { value: escapeTelegramHtml(state.activeTurnId) }) : null,
@@ -179,12 +182,14 @@ export function formatSettingsHomeMessage(
 
 export function formatModeSettingsMessage(
   locale: AppLocale,
+  scopeId: string,
   settings: ChatSessionSettings | null,
 ): string {
   return [
     t(locale, 'mode_title'),
     t(locale, 'mode_tap_to_change'),
     '',
+    t(locale, 'line_scope', { value: escapeTelegramHtml(formatTelegramScopeLabel(locale, scopeId)) }),
     t(locale, 'mode_current', { value: escapeTelegramHtml(formatCollaborationModeLabel(locale, settings?.collaborationMode ?? null)) }),
   ].join('\n');
 }
@@ -425,6 +430,18 @@ export function formatApprovalPolicyLabel(locale: AppLocale, policy: ApprovalPol
 export function formatCollaborationModeLabel(locale: AppLocale, mode: CollaborationModeValue | null): string {
   if (mode === 'plan') return t(locale, 'mode_plan');
   return t(locale, 'mode_default');
+}
+
+export function formatTelegramScopeLabel(locale: AppLocale, scopeId: string): string {
+  try {
+    const scope = parseTelegramScopeId(scopeId);
+    if (scope.topicId === null) {
+      return t(locale, 'scope_root', { chatId: scope.chatId });
+    }
+    return t(locale, 'scope_topic', { chatId: scope.chatId, topicId: scope.topicId });
+  } catch {
+    return scopeId;
+  }
 }
 
 export function formatServiceTierLabel(locale: AppLocale, tier: ServiceTierValue | null): string {

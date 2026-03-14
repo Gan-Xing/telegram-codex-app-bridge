@@ -295,7 +295,8 @@ test('mode presentation renders and marks selected option', () => {
   };
 
   assert.equal(formatCollaborationModeLabel('en', 'plan'), 'Plan');
-  assert.match(formatModeSettingsMessage('en', settings), /Current mode: <b>Plan<\/b>/);
+  assert.match(formatModeSettingsMessage('en', 'chat-mode::root', settings), /Scope: chat-mode \/ root/);
+  assert.match(formatModeSettingsMessage('en', 'chat-mode::root', settings), /Current mode: <b>Plan<\/b>/);
   assert.deepEqual(buildModeSettingsKeyboard('en', settings), [[
     { text: 'Default', callback_data: 'settings:mode:default' },
     { text: '• Plan', callback_data: 'settings:mode:plan' },
@@ -325,6 +326,7 @@ test('settings home presentation summarizes session state and exposes toggles', 
   };
 
   const rendered = formatSettingsHomeMessage('en', {
+    scopeId: 'chat-settings::root',
     threadId: 'thread-1',
     cwd: '/tmp/project',
     settings,
@@ -335,6 +337,7 @@ test('settings home presentation summarizes session state and exposes toggles', 
   const keyboard = buildSettingsHomeKeyboard('en', settings);
 
   assert.match(rendered, /<b>Settings<\/b>/);
+  assert.match(rendered, /Scope: chat-settings \/ root/);
   assert.match(rendered, /Thread: <b>thread-1<\/b>/);
   assert.match(rendered, /Queue depth: <b>2<\/b>/);
   assert.match(rendered, /Configured service tier: Fast/);
