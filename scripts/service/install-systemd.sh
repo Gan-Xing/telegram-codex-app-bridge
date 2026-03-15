@@ -19,7 +19,7 @@ mkdir -p "$SYSTEMD_UNIT_DIR"
 
 cat > "$SYSTEMD_UNIT_PATH" <<EOF
 [Unit]
-Description=Telegram Codex App Bridge
+Description=${SERVICE_DESCRIPTION}
 After=network-online.target
 Wants=network-online.target
 

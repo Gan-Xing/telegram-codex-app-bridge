@@ -14,11 +14,22 @@ STATUS_FILE="${STATUS_FILE:-${APP_HOME}/runtime/status.json}"
 DETACH="${DETACH:-auto}"
 START_NOTIFY="${START_NOTIFY:-true}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$RANDOM}"
-SAFE_RESTART_UNIT_PREFIX="${SAFE_RESTART_UNIT_PREFIX:-com.ganxing.telegram-codex-app-bridge.safe-restart}"
+SAFE_RESTART_UNIT_PREFIX="${SAFE_RESTART_UNIT_PREFIX:-${SERVICE_LABEL}.safe-restart}"
 NOTIFY_TARGET="${NOTIFY_TARGET:-auto}"
 SAFE_RESTART_CGROUP_FILE="${SAFE_RESTART_CGROUP_FILE:-/proc/$$/cgroup}"
 
 latest_notify_scope_cache="__unset__"
+latest_notify_locale_cache="__unset__"
+
+normalize_locale_code() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    zh*) printf 'zh' ;;
+    fr*) printf 'fr' ;;
+    *) printf 'en' ;;
+  esac
+}
 
 load_env_file() {
   if [[ -f "$ENV_FILE" ]]; then
@@ -109,6 +120,60 @@ try {
 NODE
 }
 
+read_scope_locale() {
+  local scope_id="${1:-}"
+  local db_path
+  db_path="$(default_store_path)"
+  if [[ -z "$scope_id" || ! -f "$db_path" ]]; then
+    return 0
+  fi
+  node - "$db_path" "$scope_id" <<'NODE'
+const fs = require('node:fs');
+
+function loadDatabaseSync() {
+  const originalEmitWarning = process.emitWarning.bind(process);
+  process.emitWarning = (warning, ...args) => {
+    const type = typeof warning === 'string'
+      ? (typeof args[0] === 'string' ? args[0] : '')
+      : warning && warning.name;
+    const message = typeof warning === 'string' ? warning : warning && warning.message;
+    if (type === 'ExperimentalWarning' && typeof message === 'string' && message.includes('SQLite is an experimental feature')) {
+      return;
+    }
+    return originalEmitWarning(warning, ...args);
+  };
+  try {
+    return require('node:sqlite').DatabaseSync;
+  } finally {
+    process.emitWarning = originalEmitWarning;
+  }
+}
+
+const dbPath = process.argv[2];
+const scopeId = process.argv[3];
+if (!dbPath || !scopeId || !fs.existsSync(dbPath)) {
+  process.exit(0);
+}
+
+try {
+  const DatabaseSync = loadDatabaseSync();
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  const row = db.prepare(`
+    SELECT locale
+    FROM chat_settings
+    WHERE chat_id = ?
+    LIMIT 1
+  `).get(scopeId);
+  if (row && row.locale !== null && row.locale !== undefined) {
+    process.stdout.write(String(row.locale));
+  }
+  db.close();
+} catch {
+  process.exit(0);
+}
+NODE
+}
+
 resolve_notify_scope_id() {
   if [[ -n "${NOTIFY_SCOPE_ID:-}" ]]; then
     printf '%s' "$NOTIFY_SCOPE_ID"
@@ -123,6 +188,81 @@ resolve_notify_scope_id() {
   if [[ -n "$latest_notify_scope_cache" ]]; then
     printf '%s' "$latest_notify_scope_cache"
   fi
+}
+
+resolve_notify_locale() {
+  if [[ -n "${NOTIFY_LOCALE:-}" ]]; then
+    normalize_locale_code "$NOTIFY_LOCALE"
+    return
+  fi
+  if [[ "$latest_notify_locale_cache" == "__unset__" ]]; then
+    local scope_id
+    scope_id="$(resolve_notify_scope_id)"
+    latest_notify_locale_cache="$(read_scope_locale "$scope_id")"
+    if [[ -z "$latest_notify_locale_cache" ]]; then
+      latest_notify_locale_cache="en"
+    fi
+  fi
+  normalize_locale_code "$latest_notify_locale_cache"
+}
+
+message_text() {
+  local locale="$1"
+  local key="$2"
+  case "${locale}:${key}" in
+    zh:restart_started) printf '[bridge] 重启已开始' ;;
+    zh:restart_succeeded) printf '[bridge] 重启成功' ;;
+    zh:restart_failed) printf '[bridge] 重启失败' ;;
+    zh:restart_queued_detached) printf '[bridge] 重启已排队（分离执行）' ;;
+    zh:detached_unit_launched) printf '已启动分离单元' ;;
+    zh:building_bridge) printf '正在构建 bridge...' ;;
+    zh:restarting_service) printf '正在重启服务...' ;;
+    zh:time_label) printf '时间' ;;
+    zh:run_id_label) printf '运行 ID' ;;
+    zh:commit_label) printf '提交' ;;
+    zh:unit_label) printf '单元' ;;
+    zh:pid_label) printf '进程号' ;;
+    zh:status_label) printf '状态' ;;
+    zh:timeout_label) printf '超时秒数' ;;
+    zh:last_status_updated_at_label) printf '最后状态更新时间' ;;
+    zh:running_label) printf '运行中' ;;
+    zh:connected_label) printf '已连接' ;;
+    fr:restart_started) printf '[bridge] redemarrage lance' ;;
+    fr:restart_succeeded) printf '[bridge] redemarrage reussi' ;;
+    fr:restart_failed) printf '[bridge] redemarrage echoue' ;;
+    fr:restart_queued_detached) printf '[bridge] redemarrage mis en file (detache)' ;;
+    fr:detached_unit_launched) printf 'Unite detachee lancee' ;;
+    fr:building_bridge) printf 'Construction du bridge...' ;;
+    fr:restarting_service) printf 'Redemarrage du service...' ;;
+    fr:time_label) printf 'heure' ;;
+    fr:run_id_label) printf 'run_id' ;;
+    fr:commit_label) printf 'commit' ;;
+    fr:unit_label) printf 'unite' ;;
+    fr:pid_label) printf 'pid' ;;
+    fr:status_label) printf 'statut' ;;
+    fr:timeout_label) printf 'timeout_sec' ;;
+    fr:last_status_updated_at_label) printf 'derniere_mise_a_jour_statut' ;;
+    fr:running_label) printf 'actif' ;;
+    fr:connected_label) printf 'connecte' ;;
+    en:restart_started) printf '[bridge] restart started' ;;
+    en:restart_succeeded) printf '[bridge] restart succeeded' ;;
+    en:restart_failed) printf '[bridge] restart failed' ;;
+    en:restart_queued_detached) printf '[bridge] restart queued (detached)' ;;
+    en:detached_unit_launched) printf 'Detached unit launched' ;;
+    en:building_bridge) printf 'Building bridge...' ;;
+    en:restarting_service) printf 'Restarting service...' ;;
+    en:time_label) printf 'time' ;;
+    en:run_id_label) printf 'run_id' ;;
+    en:commit_label) printf 'commit' ;;
+    en:unit_label) printf 'unit' ;;
+    en:pid_label) printf 'pid' ;;
+    en:status_label) printf 'status' ;;
+    en:timeout_label) printf 'timeout_sec' ;;
+    en:last_status_updated_at_label) printf 'last_status_updated_at' ;;
+    en:running_label) printf 'running' ;;
+    en:connected_label) printf 'connected' ;;
+    *) printf '%s' "$key" ;;
+  esac
 }
 
 scope_chat_id() {
@@ -265,12 +405,13 @@ should_auto_detach() {
 emit_restart_started() {
   local branch="$1"
   local commit="$2"
+  local locale="$3"
   local now_iso start_msg
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  start_msg=$'[bridge] restart started\n'
-  start_msg+="time: ${now_iso}"$'\n'
-  start_msg+="run_id: ${RUN_ID}"$'\n'
-  start_msg+="commit: ${branch}@${commit}"
+  start_msg="$(message_text "$locale" restart_started)"$'\n'
+  start_msg+="$(message_text "$locale" time_label): ${now_iso}"$'\n'
+  start_msg+="$(message_text "$locale" run_id_label): ${RUN_ID}"$'\n'
+  start_msg+="$(message_text "$locale" commit_label): ${branch}@${commit}"
   echo "$start_msg"
   notify_telegram "$start_msg"
 }
@@ -292,17 +433,18 @@ launch_detached_restart() {
     exit 1
   fi
 
-  local unit_name now_iso queued_msg notify_scope_id notify_chat_id notify_topic_id
+  local unit_name now_iso queued_msg notify_scope_id notify_chat_id notify_topic_id notify_locale
   unit_name="${SAFE_RESTART_UNIT_PREFIX}-$(run_id_for_unit)"
   notify_scope_id="$(resolve_notify_scope_id)"
   notify_chat_id="$(resolve_notify_chat_id)"
   notify_topic_id="$(resolve_notify_topic_id)"
+  notify_locale="$(resolve_notify_locale)"
   if [[ "$announce_detached" == "true" ]]; then
     now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    queued_msg=$'[bridge] restart queued (detached)\n'
-    queued_msg+="time: ${now_iso}"$'\n'
-    queued_msg+="run_id: ${RUN_ID}"$'\n'
-    queued_msg+="unit: ${unit_name}"
+    queued_msg="$(message_text "$notify_locale" restart_queued_detached)"$'\n'
+    queued_msg+="$(message_text "$notify_locale" time_label): ${now_iso}"$'\n'
+    queued_msg+="$(message_text "$notify_locale" run_id_label): ${RUN_ID}"$'\n'
+    queued_msg+="$(message_text "$notify_locale" unit_label): ${unit_name}"
     echo "$queued_msg"
     notify_telegram "$queued_msg"
   fi
@@ -319,12 +461,13 @@ launch_detached_restart() {
     --setenv=STATUS_FILE="$STATUS_FILE" \
     --setenv=NOTIFY_TARGET="$NOTIFY_TARGET" \
     --setenv=NOTIFY_SCOPE_ID="$notify_scope_id" \
+    --setenv=NOTIFY_LOCALE="$notify_locale" \
     --setenv=NOTIFY_BOT_TOKEN="${NOTIFY_BOT_TOKEN:-}" \
     --setenv=NOTIFY_CHAT_ID="${NOTIFY_CHAT_ID:-$notify_chat_id}" \
     --setenv=NOTIFY_TOPIC_ID="${NOTIFY_TOPIC_ID:-$notify_topic_id}" \
     /bin/bash "${SCRIPT_DIR}/restart-safe.sh"
 
-  echo "Detached unit launched: ${unit_name}"
+  echo "$(message_text "$notify_locale" detached_unit_launched): ${unit_name}"
 }
 
 status_is_healthy() {
@@ -363,16 +506,22 @@ NODE
 }
 
 read_status_summary() {
-  node - "$STATUS_FILE" <<'NODE'
+  local locale="${1:-en}"
+  local running_label connected_label
+  running_label="$(message_text "$locale" running_label)"
+  connected_label="$(message_text "$locale" connected_label)"
+  node - "$STATUS_FILE" "$running_label" "$connected_label" <<'NODE'
 const fs = require('node:fs');
 const statusPath = process.argv[2];
+const runningLabel = process.argv[3] || 'running';
+const connectedLabel = process.argv[4] || 'connected';
 try {
   const parsed = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
   const running = parsed.running === true ? 'true' : 'false';
   const connected = parsed.connected === true ? 'true' : 'false';
-  process.stdout.write(`running=${running} connected=${connected}`);
+  process.stdout.write(`${runningLabel}=${running} ${connectedLabel}=${connected}`);
 } catch {
-  process.stdout.write('running=unknown connected=unknown');
+  process.stdout.write(`${runningLabel}=unknown ${connectedLabel}=unknown`);
 }
 NODE
 }
@@ -395,12 +544,13 @@ main() {
   require_supported_platform
   load_env_file
 
-  local commit branch now_iso restart_started_ms
+  local commit branch now_iso restart_started_ms locale
   branch="$(git -C "$ROOT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
   commit="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  locale="$(resolve_notify_locale)"
   if should_auto_detach; then
     if [[ "$START_NOTIFY" == "true" ]]; then
-      emit_restart_started "$branch" "$commit"
+      emit_restart_started "$branch" "$commit" "$locale"
     fi
     launch_detached_restart false false
     return 0
@@ -410,16 +560,16 @@ main() {
     return 0
   fi
   if [[ "$START_NOTIFY" == "true" ]]; then
-    emit_restart_started "$branch" "$commit"
+    emit_restart_started "$branch" "$commit" "$locale"
   fi
 
   if [[ "$BUILD_BEFORE_RESTART" == "true" ]]; then
-    echo "Building bridge..."
+    echo "$(message_text "$locale" building_bridge)"
     (cd "$ROOT_DIR" && npm run build)
   fi
 
   restart_started_ms="$(node -e 'process.stdout.write(String(Date.now()))')"
-  echo "Restarting service..."
+  echo "$(message_text "$locale" restarting_service)"
   bash "${SCRIPT_DIR}/restart.sh"
 
   local deadline epoch_now
@@ -428,15 +578,15 @@ main() {
     if status_is_healthy "$restart_started_ms"; then
       local pid summary
       pid="$(read_service_pid)"
-      summary="$(read_status_summary)"
+      summary="$(read_status_summary "$locale")"
       now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       local success_msg
-      success_msg=$'[bridge] restart succeeded\n'
-      success_msg+="time: ${now_iso}"$'\n'
-      success_msg+="run_id: ${RUN_ID}"$'\n'
-      success_msg+="commit: ${branch}@${commit}"$'\n'
-      success_msg+="pid: ${pid}"$'\n'
-      success_msg+="status: ${summary}"
+      success_msg="$(message_text "$locale" restart_succeeded)"$'\n'
+      success_msg+="$(message_text "$locale" time_label): ${now_iso}"$'\n'
+      success_msg+="$(message_text "$locale" run_id_label): ${RUN_ID}"$'\n'
+      success_msg+="$(message_text "$locale" commit_label): ${branch}@${commit}"$'\n'
+      success_msg+="$(message_text "$locale" pid_label): ${pid}"$'\n'
+      success_msg+="$(message_text "$locale" status_label): ${summary}"
       echo "$success_msg"
       notify_telegram "$success_msg"
       return 0
@@ -450,13 +600,13 @@ main() {
 
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   local failure_msg
-  failure_msg=$'[bridge] restart failed\n'
-  failure_msg+="time: ${now_iso}"$'\n'
-  failure_msg+="run_id: ${RUN_ID}"$'\n'
-  failure_msg+="commit: ${branch}@${commit}"$'\n'
-  failure_msg+="timeout_sec: ${RESTART_TIMEOUT_SEC}"$'\n'
-  failure_msg+="last_status_updated_at: $(read_status_updated_at)"$'\n'
-  failure_msg+="status: $(read_status_summary)"
+  failure_msg="$(message_text "$locale" restart_failed)"$'\n'
+  failure_msg+="$(message_text "$locale" time_label): ${now_iso}"$'\n'
+  failure_msg+="$(message_text "$locale" run_id_label): ${RUN_ID}"$'\n'
+  failure_msg+="$(message_text "$locale" commit_label): ${branch}@${commit}"$'\n'
+  failure_msg+="$(message_text "$locale" timeout_label): ${RESTART_TIMEOUT_SEC}"$'\n'
+  failure_msg+="$(message_text "$locale" last_status_updated_at_label): $(read_status_updated_at)"$'\n'
+  failure_msg+="$(message_text "$locale" status_label): $(read_status_summary "$locale")"
   echo "$failure_msg" >&2
   notify_telegram "$failure_msg"
   exit 1
