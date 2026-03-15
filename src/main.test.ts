@@ -71,3 +71,38 @@ exit 0
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /\[WARN\] desktop open unavailable:/);
 });
+
+test('doctor validates gemini cli availability when gemini is configured', () => {
+  const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-doctor-gemini-'));
+  const fakeGemini = path.join(tempDir, 'fake-gemini');
+  const envFile = path.join(tempDir, '.env.gemini');
+  const defaultCwd = path.join(tempDir, 'workspace');
+  fs.mkdirSync(defaultCwd, { recursive: true });
+  fs.writeFileSync(fakeGemini, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  fs.writeFileSync(envFile, [
+    'BRIDGE_ENGINE=gemini',
+    'TG_BOT_TOKEN=dummy-token',
+    'TG_ALLOWED_USER_ID=1',
+    `GEMINI_CLI_BIN=${fakeGemini}`,
+    `DEFAULT_CWD=${defaultCwd}`,
+  ].join('\n'), 'utf8');
+
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/main.ts', 'doctor'], {
+    cwd: rootDir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ENV_FILE: envFile,
+      BRIDGE_ENGINE: 'gemini',
+      GEMINI_CLI_BIN: fakeGemini,
+      TG_BOT_TOKEN: 'dummy-token',
+      TG_ALLOWED_USER_ID: '1',
+      DEFAULT_CWD: defaultCwd,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[OK\] gemini engine runtime available/);
+  assert.match(result.stdout, /\[OK\] gemini cli available/);
+});

@@ -4,6 +4,7 @@ import { callTelegramApi, downloadTelegramFile, getTelegramFile, type TelegramRe
 import type { BridgeStore } from '../store/database.js';
 import type { Logger } from '../logger.js';
 import { getTelegramCommands } from '../i18n.js';
+import type { BridgeEngineValue } from '../config.js';
 import { createTelegramScopeId } from './scope.js';
 import type { TelegramMessageEntity } from './addressing.js';
 import type { TelegramInboundAttachment } from './media.js';
@@ -110,6 +111,7 @@ export class TelegramGateway extends EventEmitter {
     private readonly pollIntervalMs: number,
     private readonly store: BridgeStore,
     private readonly logger: Logger,
+    private readonly bridgeEngine: BridgeEngineValue = 'codex',
   ) {
     super();
     this.botKey = `telegram:${crypto.createHash('sha256').update(this.botToken).digest('hex').slice(0, 8)}`;
@@ -278,14 +280,18 @@ export class TelegramGateway extends EventEmitter {
 
   private async registerCommands(): Promise<void> {
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('zh'),
+      commands: getTelegramCommands('zh', this.bridgeEngine),
     });
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('en'),
+      commands: getTelegramCommands('en', this.bridgeEngine),
       language_code: 'en',
     });
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('zh'),
+      commands: getTelegramCommands('fr', this.bridgeEngine),
+      language_code: 'fr',
+    });
+    await callTelegramApi(this.botToken, 'setMyCommands', {
+      commands: getTelegramCommands('zh', this.bridgeEngine),
       language_code: 'zh',
     });
   }

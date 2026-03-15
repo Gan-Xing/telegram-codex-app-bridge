@@ -4,12 +4,20 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import type { Logger } from '../logger.js';
 import type {
+  EngineNotification as JsonRpcNotification,
+  EngineServerRequest as JsonRpcServerRequest,
+  ListThreadsOptions,
+  ResumeThreadOptions,
+  StartThreadOptions,
+  StartTurnOptions,
+  SteerTurnOptions,
+} from '../engine/types.js';
+import type {
   AccountRateLimitSnapshot,
   AppThread,
   AppThreadTurn,
   AppThreadTurnItem,
   AppThreadWithTurns,
-  CollaborationModeValue,
   CreditsSnapshot,
   ModelInfo,
   RateLimitWindow,
@@ -22,70 +30,23 @@ import type {
 import { getDesktopOpenSupport } from '../platform/capabilities.js';
 import { buildThreadDeepLink, openUrl } from './deeplink.js';
 
+export type {
+  EngineNotification as JsonRpcNotification,
+  EngineServerRequest as JsonRpcServerRequest,
+  ListThreadsOptions,
+  LocalImageTurnInput,
+  ResumeThreadOptions,
+  StartThreadOptions,
+  StartTurnOptions,
+  SteerTurnOptions,
+  TextTurnInput,
+  TurnInput,
+} from '../engine/types.js';
+
 interface JsonRpcResponse {
   id: string | number;
   result?: unknown;
   error?: { code: number; message: string; data?: unknown };
-}
-
-export interface JsonRpcNotification {
-  method: string;
-  params?: any;
-}
-
-export interface JsonRpcServerRequest {
-  id: string | number;
-  method: string;
-  params?: any;
-}
-
-interface ListThreadsOptions {
-  limit: number;
-  searchTerm?: string | null;
-}
-
-interface StartThreadOptions {
-  cwd: string | null;
-  approvalPolicy: string;
-  sandboxMode: SandboxModeValue;
-  model: string | null;
-  serviceTier: ServiceTierValue | null;
-}
-
-interface ResumeThreadOptions {
-  threadId: string;
-}
-
-export interface TextTurnInput {
-  type: 'text';
-  text: string;
-  text_elements: [];
-}
-
-export interface LocalImageTurnInput {
-  type: 'localImage';
-  path: string;
-}
-
-export type TurnInput = TextTurnInput | LocalImageTurnInput;
-
-interface StartTurnOptions {
-  threadId: string;
-  input: TurnInput[];
-  approvalPolicy: string;
-  sandboxMode: SandboxModeValue;
-  cwd: string | null;
-  model: string | null;
-  serviceTier: ServiceTierValue | null;
-  effort: ReasoningEffortValue | null;
-  collaborationMode: CollaborationModeValue | null;
-  developerInstructions: string | null;
-}
-
-interface SteerTurnOptions {
-  threadId: string;
-  turnId: string;
-  input: TurnInput[];
 }
 
 export const PLAN_MODE_DEVELOPER_INSTRUCTIONS = [
