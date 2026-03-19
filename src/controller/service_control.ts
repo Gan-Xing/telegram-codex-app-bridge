@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { EngineProvider } from '../engine/types.js';
 import { t } from '../i18n.js';
 import type { Logger } from '../logger.js';
+import type { RestartMode } from '../platform/capabilities.js';
 import type { AccountRateLimitSnapshot, AppLocale } from '../types.js';
 import type { RuntimeStatusStore } from './bridge_runtime.js';
 import { formatRateLimitStatusLines } from './status_command.js';
@@ -15,12 +16,14 @@ const RESTART_SCRIPT_PATH = path.resolve(CONTROLLER_DIR, '../../scripts/service/
 
 interface ServiceControlHost {
   logger: Logger;
+  restartMode: RestartMode;
   app: Pick<EngineProvider, 'isConnected' | 'start' | 'stop'> & Partial<Pick<EngineProvider, 'getAccountRateLimits' | 'readAccountRateLimits'>>;
   messages: TelegramMessageService;
   localeForChat: (scopeId: string) => AppLocale;
   activeTurnCount: () => number;
   runtimeStatus: Pick<RuntimeStatusStore, 'clearLastError' | 'setLastError' | 'getLastError'>;
   updateStatus: () => void;
+  restartBridge?: () => Promise<void>;
   spawnRestartScript?: (scopeId: string) => Promise<void>;
 }
 
@@ -64,6 +67,20 @@ export class ServiceControlCoordinator {
       return;
     }
     try {
+      if (this.host.restartMode === 'in-process') {
+        if (!this.host.restartBridge) {
+          throw new Error('in-process restart is unavailable');
+        }
+        await this.host.restartBridge();
+        this.host.runtimeStatus.clearLastError();
+        this.host.updateStatus();
+        await this.host.messages.sendMessage(scopeId, t(locale, 'restart_completed'));
+        return;
+      }
+      if (this.host.restartMode === 'none') {
+        await this.host.messages.sendMessage(scopeId, t(locale, 'restart_not_supported'));
+        return;
+      }
       if (this.host.spawnRestartScript) {
         await this.host.spawnRestartScript(scopeId);
       } else {

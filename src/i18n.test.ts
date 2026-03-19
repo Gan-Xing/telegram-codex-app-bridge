@@ -21,6 +21,7 @@ test('getTelegramCommands returns localized descriptions', () => {
   assert.equal(getTelegramCommands('zh').find((entry) => entry.command === 'restart')?.description, '重启桥接服务');
   assert.equal(getTelegramCommands('fr').find((entry) => entry.command === 'models')?.description, 'Parametres du modele');
   assert.equal(getTelegramCommands('fr').find((entry) => entry.command === 'restart')?.description, 'Redemarrer le bridge');
+  assert.equal(getTelegramCommands('en', 'codex', { restart: false }).find((entry) => entry.command === 'restart'), undefined);
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'threads'), undefined);
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'models')?.description, 'Model settings');
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'mode')?.description, 'Mode settings');

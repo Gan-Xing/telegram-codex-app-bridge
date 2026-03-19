@@ -11,7 +11,25 @@ function writeExecutable(pathname: string, content: string): void {
   fs.writeFileSync(pathname, content, { mode: 0o755 });
 }
 
-test('linux service scripts manage the systemd user lifecycle through the unified entrypoints', () => {
+function toShellPath(pathname: string): string {
+  return process.platform === 'win32' ? pathname.replaceAll('\\', '/') : pathname;
+}
+
+function joinPathEnv(...entries: Array<string | undefined>): string {
+  return entries.filter(Boolean).join(path.delimiter);
+}
+
+function runBashScript(rootDir: string, relativePath: string, env: NodeJS.ProcessEnv) {
+  return spawnSync('bash', [toShellPath(path.join(rootDir, relativePath))], {
+    cwd: rootDir,
+    env,
+    encoding: 'utf8',
+  });
+}
+
+const shellServiceTest = process.platform === 'win32' ? test.skip : test;
+
+shellServiceTest('linux service scripts manage the systemd user lifecycle through the unified entrypoints', () => {
   const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-service-test-'));
   const fakeHome = path.join(tempDir, 'home');
@@ -20,7 +38,6 @@ test('linux service scripts manage the systemd user lifecycle through the unifie
   const envFile = path.join(tempDir, '.env');
   const systemctlLog = path.join(tempDir, 'systemctl.log');
   const journalctlLog = path.join(tempDir, 'journalctl.log');
-  const realUname = spawnSync('sh', ['-c', 'command -v uname'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/uname';
   const distDir = path.join(rootDir, 'dist');
   const distMainPath = path.join(distDir, 'main.js');
   const distMainExisted = fs.existsSync(distMainPath);
@@ -35,7 +52,7 @@ test('linux service scripts manage the systemd user lifecycle through the unifie
   }
 
   writeExecutable(path.join(fakeBin, 'systemctl'), `#!/bin/sh
-printf '%s\n' "$*" >> "${systemctlLog}"
+printf '%s\n' "$*" >> "${toShellPath(systemctlLog)}"
 if [ "\${2:-}" = "status" ]; then
   echo "fake systemd status"
 fi
@@ -43,7 +60,7 @@ exit 0
 `);
 
   writeExecutable(path.join(fakeBin, 'journalctl'), `#!/bin/sh
-printf '%s\n' "$*" >> "${journalctlLog}"
+printf '%s\n' "$*" >> "${toShellPath(journalctlLog)}"
 echo "fake journal log"
 exit 0
 `);
@@ -53,27 +70,21 @@ if [ "\${1:-}" = "-s" ]; then
   echo "Linux"
   exit 0
 fi
-exec "${realUname}" "$@"
+exit 0
 `);
 
   const env = {
     ...process.env,
-    HOME: fakeHome,
-    XDG_CONFIG_HOME: fakeConfigHome,
-    PATH: `${fakeBin}:${process.env.PATH || ''}`,
+    HOME: toShellPath(fakeHome),
+    XDG_CONFIG_HOME: toShellPath(fakeConfigHome),
+    PATH: joinPathEnv(toShellPath(fakeBin), process.env.PATH),
     FOLLOW: 'false',
     LINES: '5',
-    ENV_FILE: envFile,
+    ENV_FILE: toShellPath(envFile),
   };
 
-  const runScript = (relativePath: string) => spawnSync('bash', [path.join(rootDir, relativePath)], {
-    cwd: rootDir,
-    env,
-    encoding: 'utf8',
-  });
-
   try {
-    const install = runScript('scripts/service/install.sh');
+    const install = runBashScript(rootDir, 'scripts/service/install.sh', env);
     assert.equal(install.status, 0, install.stderr || install.stdout);
 
     const unitPath = path.join(fakeConfigHome, 'systemd', 'user', 'com.ganxing.telegram-codex-app-bridge.service');
@@ -84,21 +95,21 @@ exec "${realUname}" "$@"
     assert.match(unitContent, /ExecStart=.*run-bridge\.sh/);
     assert.match(unitContent, /WorkingDirectory=/);
 
-    const status = runScript('scripts/service/status.sh');
+    const status = runBashScript(rootDir, 'scripts/service/status.sh', env);
     assert.equal(status.status, 0, status.stderr || status.stdout);
     assert.match(status.stdout, /fake systemd status/);
 
-    const logs = runScript('scripts/service/logs.sh');
+    const logs = runBashScript(rootDir, 'scripts/service/logs.sh', env);
     assert.equal(logs.status, 0, logs.stderr || logs.stdout);
     assert.match(logs.stdout, /fake journal log/);
 
-    const restart = runScript('scripts/service/restart.sh');
+    const restart = runBashScript(rootDir, 'scripts/service/restart.sh', env);
     assert.equal(restart.status, 0, restart.stderr || restart.stdout);
 
-    const stop = runScript('scripts/service/stop.sh');
+    const stop = runBashScript(rootDir, 'scripts/service/stop.sh', env);
     assert.equal(stop.status, 0, stop.stderr || stop.stdout);
 
-    const uninstall = runScript('scripts/service/uninstall.sh');
+    const uninstall = runBashScript(rootDir, 'scripts/service/uninstall.sh', env);
     assert.equal(uninstall.status, 0, uninstall.stderr || uninstall.stdout);
     assert.equal(fs.existsSync(unitPath), false);
 
@@ -119,7 +130,7 @@ exec "${realUname}" "$@"
   }
 });
 
-test('linux service scripts isolate runner paths and unit names per instance env', () => {
+shellServiceTest('linux service scripts isolate runner paths and unit names per instance env', () => {
   const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-service-instance-test-'));
   const fakeHome = path.join(tempDir, 'home');
@@ -128,18 +139,18 @@ test('linux service scripts isolate runner paths and unit names per instance env
   const envFile = path.join(tempDir, '.env.gemini');
   const bridgeHome = path.join(fakeHome, 'bridges', 'linux144-gemini');
   const systemctlLog = path.join(tempDir, 'systemctl.log');
-  const realUname = spawnSync('sh', ['-c', 'command -v uname'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/uname';
   const distDir = path.join(rootDir, 'dist');
   const distMainPath = path.join(distDir, 'main.js');
   const distMainExisted = fs.existsSync(distMainPath);
 
+  const bridgeHomeForEnv = toShellPath(bridgeHome);
   fs.mkdirSync(fakeHome, { recursive: true });
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.mkdirSync(fakeConfigHome, { recursive: true });
   fs.writeFileSync(envFile, [
     'BRIDGE_ENGINE=gemini',
     'BRIDGE_INSTANCE_ID=linux144-gemini',
-    `BRIDGE_HOME=${bridgeHome}`,
+    `BRIDGE_HOME=${bridgeHomeForEnv}`,
   ].join('\n'), 'utf8');
   if (!distMainExisted) {
     fs.mkdirSync(distDir, { recursive: true });
@@ -147,7 +158,7 @@ test('linux service scripts isolate runner paths and unit names per instance env
   }
 
   writeExecutable(path.join(fakeBin, 'systemctl'), `#!/bin/sh
-printf '%s\n' "$*" >> "${systemctlLog}"
+printf '%s\n' "$*" >> "${toShellPath(systemctlLog)}"
 exit 0
 `);
 
@@ -156,25 +167,19 @@ if [ "\${1:-}" = "-s" ]; then
   echo "Linux"
   exit 0
 fi
-exec "${realUname}" "$@"
+exit 0
 `);
 
   const env = {
     ...process.env,
-    HOME: fakeHome,
-    XDG_CONFIG_HOME: fakeConfigHome,
-    PATH: `${fakeBin}:${process.env.PATH || ''}`,
-    ENV_FILE: envFile,
+    HOME: toShellPath(fakeHome),
+    XDG_CONFIG_HOME: toShellPath(fakeConfigHome),
+    PATH: joinPathEnv(toShellPath(fakeBin), process.env.PATH),
+    ENV_FILE: toShellPath(envFile),
   };
 
-  const runScript = (relativePath: string) => spawnSync('bash', [path.join(rootDir, relativePath)], {
-    cwd: rootDir,
-    env,
-    encoding: 'utf8',
-  });
-
   try {
-    const install = runScript('scripts/service/install.sh');
+    const install = runBashScript(rootDir, 'scripts/service/install.sh', env);
     assert.equal(install.status, 0, install.stderr || install.stdout);
 
     const unitPath = path.join(fakeConfigHome, 'systemd', 'user', 'com.ganxing.telegram-codex-app-bridge-linux144-gemini.service');
@@ -189,12 +194,12 @@ exec "${realUname}" "$@"
     assert.match(runnerContent, /export ENV_FILE=/);
     assert.match(runnerContent, /export BRIDGE_ENGINE=gemini/);
     assert.match(runnerContent, /export BRIDGE_INSTANCE_ID=linux144-gemini/);
-    assert.match(runnerContent, new RegExp(`export BRIDGE_HOME=${bridgeHome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(runnerContent, new RegExp(`export BRIDGE_HOME=${bridgeHomeForEnv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
 
-    const restart = runScript('scripts/service/restart.sh');
+    const restart = runBashScript(rootDir, 'scripts/service/restart.sh', env);
     assert.equal(restart.status, 0, restart.stderr || restart.stdout);
 
-    const uninstall = runScript('scripts/service/uninstall.sh');
+    const uninstall = runBashScript(rootDir, 'scripts/service/uninstall.sh', env);
     assert.equal(uninstall.status, 0, uninstall.stderr || uninstall.stdout);
 
     const systemctlCalls = fs.readFileSync(systemctlLog, 'utf8');
@@ -208,13 +213,12 @@ exec "${realUname}" "$@"
   }
 });
 
-test('macOS restart script uses kickstart instead of bootout/bootstrap for an installed launchd agent', () => {
+shellServiceTest('macOS restart script uses kickstart instead of bootout/bootstrap for an installed launchd agent', () => {
   const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-launchd-restart-test-'));
   const fakeHome = path.join(tempDir, 'home');
   const fakeBin = path.join(tempDir, 'bin');
   const launchctlLog = path.join(tempDir, 'launchctl.log');
-  const realUname = spawnSync('sh', ['-c', 'command -v uname'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/uname';
 
   fs.mkdirSync(fakeHome, { recursive: true });
   fs.mkdirSync(fakeBin, { recursive: true });
@@ -227,7 +231,7 @@ test('macOS restart script uses kickstart instead of bootout/bootstrap for an in
 
   writeExecutable(path.join(fakeBin, 'launchctl'), [
     '#!/bin/sh',
-    `printf '%s\\n' "$*" >> "${launchctlLog}"`,
+    `printf '%s\\n' "$*" >> "${toShellPath(launchctlLog)}"`,
     'exit 0',
     '',
   ].join('\n'));
@@ -238,18 +242,14 @@ test('macOS restart script uses kickstart instead of bootout/bootstrap for an in
     '  echo "Darwin"',
     '  exit 0',
     'fi',
-    `exec "${realUname}" "$@"`,
+    'exit 0',
     '',
   ].join('\n'));
 
-  const result = spawnSync('bash', [path.join(rootDir, 'scripts/service/restart.sh')], {
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      HOME: fakeHome,
-      PATH: `${fakeBin}:${process.env.PATH || ''}`,
-    },
-    encoding: 'utf8',
+  const result = runBashScript(rootDir, 'scripts/service/restart.sh', {
+    ...process.env,
+    HOME: toShellPath(fakeHome),
+    PATH: joinPathEnv(toShellPath(fakeBin), process.env.PATH),
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -259,7 +259,7 @@ test('macOS restart script uses kickstart instead of bootout/bootstrap for an in
   assert.doesNotMatch(launchctlCalls, /bootout/);
 });
 
-test('restart-safe parses spaced env values and notifies the latest inbound private scope', () => {
+shellServiceTest('restart-safe parses spaced env values and notifies the latest inbound private scope', () => {
   const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-restart-safe-test-'));
   const fakeHome = path.join(tempDir, 'home');
@@ -271,7 +271,6 @@ test('restart-safe parses spaced env values and notifies the latest inbound priv
   const envFile = path.join(tempDir, '.env');
   const curlLog = path.join(tempDir, 'curl.log');
   const systemctlLog = path.join(tempDir, 'systemctl.log');
-  const realUname = spawnSync('sh', ['-c', 'command -v uname'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/uname';
 
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.mkdirSync(fakeConfigHome, { recursive: true });
@@ -294,7 +293,7 @@ test('restart-safe parses spaced env values and notifies the latest inbound priv
     'TG_ALLOWED_CHAT_ID=-1003742428605',
     'TG_ALLOWED_TOPIC_ID=2',
     'CODEX_APP_LAUNCH_CMD=codex app',
-    `STORE_PATH=${dbPath}`,
+    `STORE_PATH=${toShellPath(dbPath)}`,
   ].join('\n'), 'utf8');
 
   const db = openSqliteDatabase(dbPath);
@@ -322,16 +321,16 @@ test('restart-safe parses spaced env values and notifies the latest inbound priv
 
   writeExecutable(path.join(fakeBin, 'systemctl'), [
     '#!/bin/sh',
-    `printf '%s\\n' "$*" >> "${systemctlLog}"`,
+    `printf '%s\\n' "$*" >> "${toShellPath(systemctlLog)}"`,
     'if [ "${2:-}" = "restart" ]; then',
-    `  node -e "require('node:fs').writeFileSync(process.argv[1], JSON.stringify({ running: true, connected: true, updatedAt: new Date().toISOString() }))" "${statusFile}"`,
+    `  node -e "require('node:fs').writeFileSync(process.argv[1], JSON.stringify({ running: true, connected: true, updatedAt: new Date().toISOString() }))" "${toShellPath(statusFile)}"`,
     'fi',
     'exit 0',
     '',
   ].join('\n'));
 
   writeExecutable(path.join(fakeBin, 'curl'), `#!/bin/sh
-printf '%s\n' "$*" >> "${curlLog}"
+printf '%s\n' "$*" >> "${toShellPath(curlLog)}"
 printf '{"ok":true}'
 exit 0
 `);
@@ -342,25 +341,21 @@ exit 0
     '  echo "Linux"',
     '  exit 0',
     'fi',
-    `exec "${realUname}" "$@"`,
+    'exit 0',
     '',
   ].join('\n'));
 
-  const result = spawnSync('bash', [path.join(rootDir, 'scripts/service/restart-safe.sh')], {
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      HOME: fakeHome,
-      XDG_CONFIG_HOME: fakeConfigHome,
-      PATH: `${fakeBin}:${process.env.PATH || ''}`,
-      ENV_FILE: envFile,
-      STATUS_FILE: statusFile,
-      BUILD_BEFORE_RESTART: 'false',
-      RESTART_TIMEOUT_SEC: '5',
-      RESTART_POLL_SEC: '1',
-      DETACH: 'false',
-    },
-    encoding: 'utf8',
+  const result = runBashScript(rootDir, 'scripts/service/restart-safe.sh', {
+    ...process.env,
+    HOME: toShellPath(fakeHome),
+    XDG_CONFIG_HOME: toShellPath(fakeConfigHome),
+    PATH: joinPathEnv(toShellPath(fakeBin), process.env.PATH),
+    ENV_FILE: toShellPath(envFile),
+    STATUS_FILE: toShellPath(statusFile),
+    BUILD_BEFORE_RESTART: 'false',
+    RESTART_TIMEOUT_SEC: '5',
+    RESTART_POLL_SEC: '1',
+    DETACH: 'false',
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -377,7 +372,7 @@ exit 0
   assert.match(systemctlCalls, /--user restart com\.ganxing\.telegram-codex-app-bridge\.service/);
 });
 
-test('restart-safe auto-detaches inside the bridge service and still emits the final callback', () => {
+shellServiceTest('restart-safe auto-detaches inside the bridge service and still emits the final callback', () => {
   const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-restart-safe-auto-detach-'));
   const fakeHome = path.join(tempDir, 'home');
@@ -392,7 +387,6 @@ test('restart-safe auto-detaches inside the bridge service and still emits the f
   const systemdRunLog = path.join(tempDir, 'systemd-run.log');
   const systemdRunEnvLog = path.join(tempDir, 'systemd-run.env.log');
   const fakeCgroupFile = path.join(tempDir, 'cgroup');
-  const realUname = spawnSync('sh', ['-c', 'command -v uname'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/uname';
 
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.mkdirSync(fakeConfigHome, { recursive: true });
@@ -414,7 +408,7 @@ test('restart-safe auto-detaches inside the bridge service and still emits the f
     'TG_ALLOWED_USER_ID=7689890344',
     'TG_ALLOWED_CHAT_ID=-1003742428605',
     'TG_ALLOWED_TOPIC_ID=2',
-    `STORE_PATH=${dbPath}`,
+    `STORE_PATH=${toShellPath(dbPath)}`,
   ].join('\n'), 'utf8');
   fs.writeFileSync(
     fakeCgroupFile,
@@ -439,9 +433,9 @@ test('restart-safe auto-detaches inside the bridge service and still emits the f
 
   writeExecutable(path.join(fakeBin, 'systemctl'), [
     '#!/bin/sh',
-    `printf '%s\\n' "$*" >> "${systemctlLog}"`,
+    `printf '%s\\n' "$*" >> "${toShellPath(systemctlLog)}"`,
     'if [ "${2:-}" = "restart" ]; then',
-    `  node -e "require('node:fs').writeFileSync(process.argv[1], JSON.stringify({ running: true, connected: true, updatedAt: new Date().toISOString() }))" "${statusFile}"`,
+    `  node -e "require('node:fs').writeFileSync(process.argv[1], JSON.stringify({ running: true, connected: true, updatedAt: new Date().toISOString() }))" "${toShellPath(statusFile)}"`,
     'fi',
     'exit 0',
     '',
@@ -449,15 +443,15 @@ test('restart-safe auto-detaches inside the bridge service and still emits the f
 
   writeExecutable(path.join(fakeBin, 'systemd-run'), [
     '#!/bin/sh',
-    `printf '%s\\n' "$*" >> "${systemdRunLog}"`,
+    `printf '%s\\n' "$*" >> "${toShellPath(systemdRunLog)}"`,
     'while [ "$#" -gt 0 ]; do',
     '  case "$1" in',
     '    --setenv=*)',
     '      kv="${1#--setenv=}"',
-    `      printf '%s\\n' "$kv" >> "${systemdRunEnvLog}"`,
-    '      export "$kv"',
-    '      shift',
-    '      ;;',
+    `      printf '%s\\n' "$kv" >> "${toShellPath(systemdRunEnvLog)}"`,
+      '      export "$kv"',
+      '      shift',
+      '      ;;',
     '    --unit)',
     '      shift 2',
     '      ;;',
@@ -474,7 +468,7 @@ test('restart-safe auto-detaches inside the bridge service and still emits the f
   ].join('\n'));
 
   writeExecutable(path.join(fakeBin, 'curl'), `#!/bin/sh
-printf '%s\n' "$*" >> "${curlLog}"
+printf '%s\n' "$*" >> "${toShellPath(curlLog)}"
 printf '{"ok":true}'
 exit 0
 `);
@@ -485,25 +479,21 @@ exit 0
     '  echo "Linux"',
     '  exit 0',
     'fi',
-    `exec "${realUname}" "$@"`,
+    'exit 0',
     '',
   ].join('\n'));
 
-  const result = spawnSync('bash', [path.join(rootDir, 'scripts/service/restart-safe.sh')], {
-    cwd: rootDir,
-    env: {
-      ...process.env,
-      HOME: fakeHome,
-      XDG_CONFIG_HOME: fakeConfigHome,
-      PATH: `${fakeBin}:${process.env.PATH || ''}`,
-      ENV_FILE: envFile,
-      STATUS_FILE: statusFile,
-      BUILD_BEFORE_RESTART: 'false',
-      RESTART_TIMEOUT_SEC: '5',
-      RESTART_POLL_SEC: '1',
-      SAFE_RESTART_CGROUP_FILE: fakeCgroupFile,
-    },
-    encoding: 'utf8',
+  const result = runBashScript(rootDir, 'scripts/service/restart-safe.sh', {
+    ...process.env,
+    HOME: toShellPath(fakeHome),
+    XDG_CONFIG_HOME: toShellPath(fakeConfigHome),
+    PATH: joinPathEnv(toShellPath(fakeBin), process.env.PATH),
+    ENV_FILE: toShellPath(envFile),
+    STATUS_FILE: toShellPath(statusFile),
+    BUILD_BEFORE_RESTART: 'false',
+    RESTART_TIMEOUT_SEC: '5',
+    RESTART_POLL_SEC: '1',
+    SAFE_RESTART_CGROUP_FILE: toShellPath(fakeCgroupFile),
   });
 
   assert.equal(result.status, 0, result.stderr || result.stdout);

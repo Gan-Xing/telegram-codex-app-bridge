@@ -1,10 +1,10 @@
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import type { AppConfig } from '../config.js';
 import { GeminiCliClient, type GeminiCliRunHandle } from '../gemini_cli/client.js';
 import { mapGeminiToolToParsedCmdType, parseGeminiStreamLine, type GeminiStreamEvent } from '../gemini_cli/events.js';
 import type { Logger } from '../logger.js';
+import { spawnCommandSync } from '../process/spawn_command.js';
 import type {
   AccountRateLimitSnapshot,
   AppThread,
@@ -701,7 +701,7 @@ function buildGeminiPrompt(input: TurnInput[], developerInstructions: string | n
 
 function detectGeminiUserAgent(geminiCliBin: string): string {
   try {
-    const result = spawnSync(geminiCliBin, ['--version'], { encoding: 'utf8' });
+    const result = spawnCommandSync(geminiCliBin, ['--version'], { encoding: 'utf8' });
     const version = `${result.stdout || ''}${result.stderr || ''}`.trim();
     if (result.status === 0 && version) {
       return `gemini-cli/${version}`;

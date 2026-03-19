@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 
 export type ServiceManager = 'launchd' | 'systemd' | 'manual';
+export type RestartMode = 'service' | 'in-process' | 'none';
 
 export interface OpenUrlCommand {
   command: string;
@@ -10,6 +11,7 @@ export interface OpenUrlCommand {
 export interface PlatformCapabilities {
   os: NodeJS.Platform;
   serviceManager: ServiceManager;
+  restartMode: RestartMode;
   supportsDesktopOpen: boolean;
   supportsDeepLink: boolean;
   supportsAutolaunch: boolean;
@@ -28,6 +30,7 @@ export function detectPlatformCapabilities(platform: NodeJS.Platform = process.p
       return {
         os: platform,
         serviceManager: 'launchd',
+        restartMode: 'service',
         supportsDesktopOpen: true,
         supportsDeepLink: true,
         supportsAutolaunch: true,
@@ -37,6 +40,7 @@ export function detectPlatformCapabilities(platform: NodeJS.Platform = process.p
       return {
         os: platform,
         serviceManager: 'systemd',
+        restartMode: 'service',
         supportsDesktopOpen: true,
         supportsDeepLink: true,
         supportsAutolaunch: true,
@@ -46,6 +50,7 @@ export function detectPlatformCapabilities(platform: NodeJS.Platform = process.p
       return {
         os: platform,
         serviceManager: 'manual',
+        restartMode: 'in-process',
         supportsDesktopOpen: true,
         supportsDeepLink: true,
         supportsAutolaunch: true,
@@ -55,6 +60,7 @@ export function detectPlatformCapabilities(platform: NodeJS.Platform = process.p
       return {
         os: platform,
         serviceManager: 'manual',
+        restartMode: 'none',
         supportsDesktopOpen: false,
         supportsDeepLink: false,
         supportsAutolaunch: false,

@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
-import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import { type ChildProcessByStdio } from 'node:child_process';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import type { Logger } from '../logger.js';
+import { spawnCommand } from '../process/spawn_command.js';
 
 export interface GeminiCliRunOptions {
   prompt: string;
@@ -76,7 +77,7 @@ export class GeminiCliClient extends EventEmitter {
     for (const includeDirectory of options.includeDirectories) {
       args.push('--include-directories', includeDirectory);
     }
-    const child = spawn(this.geminiCliBin, args, {
+    const child = spawnCommand(this.geminiCliBin, args, {
       cwd: options.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,

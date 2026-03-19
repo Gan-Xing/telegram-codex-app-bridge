@@ -100,6 +100,7 @@ export interface TelegramCallbackEvent {
 
 export class TelegramGateway extends EventEmitter {
   private running = false;
+  private pollSessionId = 0;
   private botKey: string;
   private botUsername: string | null = null;
   private botUserId: number | null = null;
@@ -112,6 +113,7 @@ export class TelegramGateway extends EventEmitter {
     private readonly store: BridgeStore,
     private readonly logger: Logger,
     private readonly bridgeEngine: BridgeEngineValue = 'codex',
+    private readonly supportsRestartCommand = true,
   ) {
     super();
     this.botKey = `telegram:${crypto.createHash('sha256').update(this.botToken).digest('hex').slice(0, 8)}`;
@@ -124,13 +126,15 @@ export class TelegramGateway extends EventEmitter {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    const pollSessionId = ++this.pollSessionId;
     await this.resolveBotIdentity();
     await this.registerCommands();
-    void this.pollLoop();
+    void this.pollLoop(pollSessionId);
   }
 
   stop(): void {
     this.running = false;
+    this.pollSessionId += 1;
   }
 
   async sendMessage(
@@ -280,24 +284,24 @@ export class TelegramGateway extends EventEmitter {
 
   private async registerCommands(): Promise<void> {
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('zh', this.bridgeEngine),
+      commands: getTelegramCommands('zh', this.bridgeEngine, { restart: this.supportsRestartCommand }),
     });
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('en', this.bridgeEngine),
+      commands: getTelegramCommands('en', this.bridgeEngine, { restart: this.supportsRestartCommand }),
       language_code: 'en',
     });
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('fr', this.bridgeEngine),
+      commands: getTelegramCommands('fr', this.bridgeEngine, { restart: this.supportsRestartCommand }),
       language_code: 'fr',
     });
     await callTelegramApi(this.botToken, 'setMyCommands', {
-      commands: getTelegramCommands('zh', this.bridgeEngine),
+      commands: getTelegramCommands('zh', this.bridgeEngine, { restart: this.supportsRestartCommand }),
       language_code: 'zh',
     });
   }
 
-  private async pollLoop(): Promise<void> {
-    while (this.running) {
+  private async pollLoop(pollSessionId: number): Promise<void> {
+    while (this.running && pollSessionId === this.pollSessionId) {
       try {
         const offset = this.store.getTelegramOffset(this.botKey) + 1;
         const result = await callTelegramApi<TelegramUpdate[]>(this.botToken, 'getUpdates', {
@@ -305,16 +309,25 @@ export class TelegramGateway extends EventEmitter {
           offset,
           allowed_updates: ['message', 'callback_query']
         });
+        if (!this.running || pollSessionId !== this.pollSessionId) {
+          return;
+        }
         if (!result.ok || !result.result) {
           this.logger.warn('telegram.getUpdates failed', result.description);
           await sleep(this.pollIntervalMs);
           continue;
         }
         for (const update of result.result) {
+          if (!this.running || pollSessionId !== this.pollSessionId) {
+            return;
+          }
           this.store.setTelegramOffset(this.botKey, update.update_id);
           await this.handleUpdate(update);
         }
       } catch (error) {
+        if (!this.running || pollSessionId !== this.pollSessionId) {
+          return;
+        }
         this.logger.error('telegram.pollLoop error', toErrorMeta(error));
         await sleep(this.pollIntervalMs);
       }

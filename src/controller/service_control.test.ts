@@ -9,6 +9,7 @@ function makeHost(overrides: Record<string, unknown> = {}) {
   const messages: Array<{ scopeId: string; text: string }> = [];
   const host = {
     logger: new Logger('error', path.join(os.tmpdir(), 'telegram-codex-service-control.test.log')),
+    restartMode: 'service' as const,
     app: {
       connected: true,
       stopCalls: 0,
@@ -72,6 +73,10 @@ function makeHost(overrides: Record<string, unknown> = {}) {
     async spawnRestartScript(scopeId: string) {
       this.spawnRestartScriptCalls.push(scopeId);
     },
+    restartBridgeCalls: 0,
+    async restartBridge() {
+      this.restartBridgeCalls += 1;
+    },
     sentMessages: messages,
     ...overrides,
   };
@@ -118,4 +123,30 @@ test('restart queues the safe restart script for the current scope', async () =>
 
   assert.deepEqual(host.spawnRestartScriptCalls, ['chat-1']);
   assert.match(host.sentMessages[0]?.text ?? '', /桥接重启已排队/);
+});
+
+test('restart performs an in-process bridge restart on manual platforms', async () => {
+  const host = makeHost({
+    restartMode: 'in-process',
+  });
+  const service = new ServiceControlCoordinator(host as any);
+
+  await service.restart('chat-1', 'zh');
+
+  assert.equal(host.restartBridgeCalls, 1);
+  assert.deepEqual(host.spawnRestartScriptCalls, []);
+  assert.match(host.sentMessages[0]?.text ?? '', /桥接已重启/);
+});
+
+test('restart reports unsupported hosts clearly when restart is unavailable', async () => {
+  const host = makeHost({
+    restartMode: 'none',
+  });
+  const service = new ServiceControlCoordinator(host as any);
+
+  await service.restart('chat-1', 'zh');
+
+  assert.equal(host.restartBridgeCalls, 0);
+  assert.deepEqual(host.spawnRestartScriptCalls, []);
+  assert.match(host.sentMessages[0]?.text ?? '', /当前主机不支持桥接自重启/);
 });

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import dotenv from 'dotenv';
 import type { LogLevel } from './logger.js';
-import { detectPlatformCapabilities, getCommandLookupProgram } from './platform/capabilities.js';
+import { detectPlatformCapabilities, getCommandLookupProgram, type PlatformCapabilities } from './platform/capabilities.js';
 import type { ApprovalPolicyValue, SandboxModeValue } from './types.js';
 
 export type BridgeEngineValue = 'codex' | 'gemini';
@@ -14,6 +14,7 @@ export const INSTANCES_APP_HOME = path.join(LEGACY_APP_HOME, 'instances');
 
 export interface AppConfig {
   envFile: string;
+  platform?: PlatformCapabilities;
   bridgeEngine: BridgeEngineValue;
   bridgeInstanceId: string | null;
   bridgeHome: string;
@@ -50,6 +51,7 @@ export function loadConfig(): AppConfig {
   const runtimePaths = resolveBridgeRuntimePaths();
   const config: AppConfig = {
     envFile,
+    platform,
     bridgeEngine: runtimePaths.bridgeEngine,
     bridgeInstanceId: runtimePaths.bridgeInstanceId,
     bridgeHome: runtimePaths.bridgeHome,

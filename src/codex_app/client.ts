@@ -28,6 +28,7 @@ import type {
   ThreadStatusKind,
 } from '../types.js';
 import { getDesktopOpenSupport } from '../platform/capabilities.js';
+import { spawnCommand } from '../process/spawn_command.js';
 import { buildThreadDeepLink, openUrl } from './deeplink.js';
 
 export type {
@@ -259,16 +260,17 @@ export class CodexAppClient extends EventEmitter {
       this.logger.warn('codex.desktop_autolaunch_skipped', { reason: 'no launch command configured' });
     }
     this.port = await reservePort();
-    this.child = spawn(this.codexCliBin, ['app-server', '--listen', `ws://127.0.0.1:${this.port}`], {
+    const child = spawnCommand(this.codexCliBin, ['app-server', '--listen', `ws://127.0.0.1:${this.port}`], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    this.child.stderr?.on('data', chunk => {
+    this.child = child;
+    child.stderr?.on('data', chunk => {
       this.logger.debug('codex.app-server.stderr', chunk.toString().trim());
     });
-    this.child.stdout?.on('data', chunk => {
+    child.stdout?.on('data', chunk => {
       this.logger.debug('codex.app-server.stdout', chunk.toString().trim());
     });
-    this.child.on('exit', (code, signal) => {
+    child.on('exit', (code, signal) => {
       this.child = null;
       this.handleDisconnect({ code, signal, source: 'process-exit' });
     });

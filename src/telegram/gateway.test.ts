@@ -149,3 +149,19 @@ test('TelegramGateway still emits private chat messages when a group chat is con
   assert.equal(events[0]?.chatType, 'private');
   assert.equal(events[0]?.topicId, null);
 });
+
+test('TelegramGateway invalidates the previous polling session after stop/start', async () => {
+  const gateway = new TelegramGateway('token', '42', null, 1000, storeStub as any, loggerStub as any);
+  const pollSessionIds: number[] = [];
+  (gateway as any).resolveBotIdentity = async () => {};
+  (gateway as any).registerCommands = async () => {};
+  (gateway as any).pollLoop = async (pollSessionId: number) => {
+    pollSessionIds.push(pollSessionId);
+  };
+
+  await gateway.start();
+  gateway.stop();
+  await gateway.start();
+
+  assert.deepEqual(pollSessionIds, [1, 3]);
+});

@@ -361,12 +361,30 @@ export function createBridgeComposition(
 
   const serviceControl = new ServiceControlCoordinator({
     logger,
+    restartMode: config.platform?.restartMode ?? 'service',
     app,
     messages,
     localeForChat: (scopeId) => localeForChat(scopeId),
     activeTurnCount: () => activeTurns.count(),
     runtimeStatus,
     updateStatus,
+    restartBridge: async () => {
+      bot.stop();
+      await app.stop();
+      updateStatus();
+      let startError: unknown = null;
+      try {
+        await app.start();
+      } catch (error) {
+        startError = error;
+      }
+      await bot.start();
+      runtimeStatus.setBotUsername(bot.username);
+      updateStatus();
+      if (startError) {
+        throw startError;
+      }
+    },
   });
 
   const telegramRouter = new TelegramIngressRouter({

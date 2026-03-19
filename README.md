@@ -20,6 +20,7 @@ The runtime model is fixed:
 - Guided plan flow for Codex bots with confirm-or-revise gating
 - Provider-aware `/help`, `/status`, `/settings`, and slash-command registration
 - User-service deployment for Linux (`systemd --user`) and macOS (`launchd`)
+- Manual foreground operation on Windows
 
 ## Engine differences
 
@@ -41,7 +42,7 @@ The bridge does not try to fake missing Gemini features. Unsupported commands ar
 
 ## Requirements
 
-- Linux or macOS
+- Linux, macOS, or Windows
 - Node.js 24+
 - One Telegram bot token per instance
 - Your Telegram numeric user id
@@ -49,6 +50,8 @@ The bridge does not try to fake missing Gemini features. Unsupported commands ar
   - authenticated `codex` CLI
 - For `gemini` instances:
   - authenticated `gemini` CLI
+
+Windows support is currently `manual` mode only. The bridge can run in the foreground and `/restart` performs an in-process bridge restart, but the service install scripts remain Linux/macOS only.
 
 ## Instance layout
 
@@ -95,6 +98,30 @@ ENV_FILE=.env.gemini npm run doctor
 ENV_FILE=.env.gemini npm run serve
 ```
 
+Windows PowerShell manual start:
+
+```powershell
+$env:ENV_FILE=".env.codex"
+npm run build
+$env:ENV_FILE=".env.codex"
+npm run doctor
+$env:ENV_FILE=".env.codex"
+npm run serve
+```
+
+For Gemini on Windows:
+
+```powershell
+$env:ENV_FILE=".env.gemini"
+npm run build
+$env:ENV_FILE=".env.gemini"
+npm run doctor
+$env:ENV_FILE=".env.gemini"
+npm run serve
+```
+
+If the Codex CLI was installed through the Microsoft Store and the default `codex` command is not directly executable from Node, set `CODEX_CLI_BIN` in your env file to a directly runnable `codex.exe` path.
+
 ## Example env files
 
 Codex bot:
@@ -130,6 +157,8 @@ GEMINI_HEADLESS_TIMEOUT_MS=300000
 ```
 
 ## Service install
+
+Service install is supported on Linux and macOS only. Windows should run the bridge in the foreground or under an external process manager of your choice.
 
 Linux user service:
 

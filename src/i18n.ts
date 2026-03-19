@@ -271,6 +271,8 @@ const EN_MESSAGES = {
     reconnect_succeeded: 'Codex session refreshed.',
     reconnect_rate_limits_unavailable: 'Codex session refreshed, but rate limits are unavailable right now.',
     reconnect_failed: 'Failed to refresh the Codex session: {error}',
+    restart_completed: 'Bridge restarted.',
+    restart_not_supported: 'This host does not support bridge restart. Restart the process manually.',
     restart_requested: 'Bridge restart queued. A follow-up notification will be sent here if the restart script can report back.',
     restart_failed: 'Failed to queue the bridge restart: {error}',
     approval_requested: 'Approval requested: {kind}',
@@ -722,6 +724,8 @@ const ZH_MESSAGES = {
     reconnect_succeeded: 'Codex 会话已刷新。',
     reconnect_rate_limits_unavailable: 'Codex 会话已刷新，但当前无法读取额度信息。',
     reconnect_failed: '刷新 Codex 会话失败：{error}',
+    restart_completed: '桥接已重启。',
+    restart_not_supported: '当前主机不支持桥接自重启，请手动重启进程。',
     restart_requested: '桥接重启已排队。如果重启脚本能够回传状态，会继续在这里通知你。',
     restart_failed: '桥接重启排队失败：{error}',
     approval_requested: '需要审批：{kind}',
@@ -1142,6 +1146,8 @@ const FR_MESSAGES = {
   reconnect_succeeded: 'Session Codex reconnectee.',
   reconnect_rate_limits_unavailable: 'Impossible d actualiser les limites pour le moment.',
   reconnect_failed: 'Echec de la reconnexion : {error}',
+  restart_completed: 'Bridge redemarre.',
+  restart_not_supported: 'Cet hote ne prend pas en charge le redemarrage du bridge. Redemarrez le processus manuellement.',
   restart_requested: 'Redemarrage du bridge mis en file.',
   restart_failed: 'Echec de la demande de redemarrage : {error}',
   maintenance_active_turn_blocked: 'Attendez la fin de la reponse courante avant d executer cette maintenance.',
@@ -1188,7 +1194,9 @@ export function t(locale: AppLocale, key: MessageKey, params: MessageParams = {}
 export function getTelegramCommands(
   locale: AppLocale,
   engine: 'codex' | 'gemini' = 'codex',
+  options: { restart?: boolean } = {},
 ): Array<{ command: string; description: string }> {
+  const includeRestart = options.restart ?? true;
   if (engine === 'gemini') {
     return [
       { command: 'help', description: t(locale, 'cmd_desc_help') },
@@ -1197,7 +1205,7 @@ export function getTelegramCommands(
       { command: 'models', description: t(locale, 'cmd_desc_models') },
       { command: 'mode', description: t(locale, 'cmd_desc_mode') },
       { command: 'settings', description: t(locale, 'cmd_desc_settings') },
-      { command: 'restart', description: t(locale, 'cmd_desc_restart') },
+      ...(includeRestart ? [{ command: 'restart', description: t(locale, 'cmd_desc_restart') }] : []),
       { command: 'queue', description: t(locale, 'cmd_desc_queue') },
       { command: 'where', description: t(locale, 'cmd_desc_where') },
       { command: 'interrupt', description: t(locale, 'cmd_desc_interrupt') },
@@ -1215,7 +1223,7 @@ export function getTelegramCommands(
     { command: 'mode', description: t(locale, 'cmd_desc_mode') },
     { command: 'settings', description: t(locale, 'cmd_desc_settings') },
     { command: 'reconnect', description: t(locale, 'cmd_desc_reconnect') },
-    { command: 'restart', description: t(locale, 'cmd_desc_restart') },
+    ...(includeRestart ? [{ command: 'restart', description: t(locale, 'cmd_desc_restart') }] : []),
     { command: 'queue', description: t(locale, 'cmd_desc_queue') },
     { command: 'guide', description: t(locale, 'cmd_desc_guide') },
     { command: 'permissions', description: t(locale, 'cmd_desc_permissions') },

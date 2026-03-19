@@ -9,6 +9,7 @@ import { TelegramGateway } from './telegram/gateway.js';
 import { BridgeController } from './controller/controller.js';
 import { acquireProcessLock, LockHeldError } from './lock.js';
 import { detectPlatformCapabilities, getCommandLookupProgram, getDesktopOpenSupport } from './platform/capabilities.js';
+import { spawnCommandSync } from './process/spawn_command.js';
 import { readRuntimeStatus, writeRuntimeStatus } from './runtime.js';
 
 const command = process.argv[2] || 'serve';
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
       store,
       logger,
       config.bridgeEngine,
+      (config.platform?.restartMode ?? 'service') !== 'none',
     );
     const app = createEngineProvider(config, logger);
     const controller = new BridgeController(config, store, logger, bot, app);
@@ -169,7 +171,7 @@ function hasCommand(commandName: string): boolean {
 function hasConfiguredCodexBin(binPath: string | undefined): boolean {
   if (!binPath || !binPath.trim()) return false;
   try {
-    fs.accessSync(binPath, fs.constants.X_OK);
+    fs.accessSync(binPath, executableAccessMode());
     return true;
   } catch {
     return false;
@@ -179,17 +181,21 @@ function hasConfiguredCodexBin(binPath: string | undefined): boolean {
 function hasConfiguredGeminiBin(binPath: string | undefined): boolean {
   if (!binPath || !binPath.trim()) return false;
   try {
-    fs.accessSync(binPath, fs.constants.X_OK);
+    fs.accessSync(binPath, executableAccessMode());
     return true;
   } catch {
     return false;
   }
 }
 
+function executableAccessMode(): number {
+  return process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK;
+}
+
 function hasCodexAppServer(configuredCodexBin: string | undefined): boolean {
   if (configuredCodexBin && hasConfiguredCodexBin(configuredCodexBin)) {
     try {
-      const result = spawnSync(configuredCodexBin, ['app-server', '--help'], { stdio: 'ignore' });
+      const result = spawnCommandSync(configuredCodexBin, ['app-server', '--help'], { stdio: 'ignore' });
       return result.status === 0;
     } catch {
       return false;
@@ -198,7 +204,7 @@ function hasCodexAppServer(configuredCodexBin: string | undefined): boolean {
 
   if (!hasCommand('codex')) return false;
   try {
-    const result = spawnSync('codex', ['app-server', '--help'], { stdio: 'ignore' });
+    const result = spawnCommandSync('codex', ['app-server', '--help'], { stdio: 'ignore' });
     return result.status === 0;
   } catch {
     return false;

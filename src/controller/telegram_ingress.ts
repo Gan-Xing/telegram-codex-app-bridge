@@ -293,7 +293,7 @@ export class TelegramIngressRouter {
   }
 
   private async showHelp(scopeId: string, locale: AppLocale): Promise<void> {
-    const commands = getTelegramCommands(locale, this.host.config.bridgeEngine)
+    const commands = getTelegramCommands(locale, this.host.config.bridgeEngine, { restart: this.supportsRestartCommand() })
       .map((entry) => `/${entry.command}`);
     const trailer = [
       ...(this.host.config.bridgeEngine === 'codex' ? [t(locale, 'help_advanced_aliases')] : []),
@@ -389,6 +389,8 @@ export class TelegramIngressRouter {
         return capabilities.reveal;
       case 'reconnect':
         return capabilities.reconnect;
+      case 'restart':
+        return this.supportsRestartCommand();
       case 'mode':
         return this.host.config.bridgeEngine === 'gemini' || capabilities.guidedPlan === 'full';
       case 'plan':
@@ -404,5 +406,9 @@ export class TelegramIngressRouter {
       default:
         return true;
     }
+  }
+
+  private supportsRestartCommand(): boolean {
+    return (this.host.config.platform?.restartMode ?? 'service') !== 'none';
   }
 }

@@ -6,6 +6,7 @@ test('detectPlatformCapabilities returns launchd defaults on macOS', () => {
   assert.deepEqual(detectPlatformCapabilities('darwin'), {
     os: 'darwin',
     serviceManager: 'launchd',
+    restartMode: 'service',
     supportsDesktopOpen: true,
     supportsDeepLink: true,
     supportsAutolaunch: true,
@@ -17,6 +18,7 @@ test('detectPlatformCapabilities returns systemd defaults on linux', () => {
   assert.deepEqual(detectPlatformCapabilities('linux'), {
     os: 'linux',
     serviceManager: 'systemd',
+    restartMode: 'service',
     supportsDesktopOpen: true,
     supportsDeepLink: true,
     supportsAutolaunch: true,
@@ -24,10 +26,23 @@ test('detectPlatformCapabilities returns systemd defaults on linux', () => {
   });
 });
 
+test('detectPlatformCapabilities returns in-process restart defaults on Windows', () => {
+  assert.deepEqual(detectPlatformCapabilities('win32'), {
+    os: 'win32',
+    serviceManager: 'manual',
+    restartMode: 'in-process',
+    supportsDesktopOpen: true,
+    supportsDeepLink: true,
+    supportsAutolaunch: true,
+    commandLookupProgram: 'where',
+  });
+});
+
 test('detectPlatformCapabilities returns manual defaults on unsupported platforms', () => {
   assert.deepEqual(detectPlatformCapabilities('freebsd'), {
     os: 'freebsd',
     serviceManager: 'manual',
+    restartMode: 'none',
     supportsDesktopOpen: false,
     supportsDeepLink: false,
     supportsAutolaunch: false,
