@@ -6,7 +6,7 @@ import { t } from '../i18n.js';
 import type { Logger } from '../logger.js';
 import type { RestartMode } from '../platform/capabilities.js';
 import { getServiceRestartScriptCommand } from '../platform/service_scripts.js';
-import type { AccountRateLimitSnapshot, AppLocale } from '../types.js';
+import type { AccountIdentitySnapshot, AccountRateLimitSnapshot, AppLocale } from '../types.js';
 import type { RuntimeStatusStore } from './bridge_runtime.js';
 import { formatRateLimitStatusLines } from './status_command.js';
 import type { TelegramMessageService } from './telegram_message_service.js';
@@ -18,7 +18,8 @@ const ROOT_DIR = path.resolve(CONTROLLER_DIR, '../..');
 interface ServiceControlHost {
   logger: Logger;
   restartMode: RestartMode;
-  app: Pick<EngineProvider, 'isConnected' | 'start' | 'stop'> & Partial<Pick<EngineProvider, 'getAccountRateLimits' | 'readAccountRateLimits'>>;
+  app: Pick<EngineProvider, 'isConnected' | 'start' | 'stop'>
+    & Partial<Pick<EngineProvider, 'getAccountIdentity' | 'readAccountIdentity' | 'getAccountRateLimits' | 'readAccountRateLimits'>>;
   messages: TelegramMessageService;
   localeForChat: (scopeId: string) => AppLocale;
   activeTurnCount: () => number;
@@ -40,6 +41,14 @@ export class ServiceControlCoordinator {
       await this.host.app.stop();
       this.host.updateStatus();
       await this.host.app.start();
+      let accountIdentity: AccountIdentitySnapshot | null = null;
+      if (typeof this.host.app.readAccountIdentity === 'function') {
+        try {
+          accountIdentity = await this.host.app.readAccountIdentity();
+        } catch (error) {
+          this.host.logger.warn('codex.reconnect_account_identity_failed', { error: String(error) });
+        }
+      }
       let rateLimits: AccountRateLimitSnapshot | null = null;
       if (typeof this.host.app.readAccountRateLimits === 'function') {
         try {
@@ -53,6 +62,9 @@ export class ServiceControlCoordinator {
       const lines = [
         t(locale, 'reconnect_succeeded'),
         t(locale, 'status_connected', { value: t(locale, this.host.app.isConnected() ? 'yes' : 'no') }),
+        ...(accountIdentity
+          ? [t(locale, 'status_account_identity', { value: formatAccountIdentityLabel(accountIdentity) })]
+          : []),
         ...(rateLimits ? formatRateLimitStatusLines(locale, rateLimits) : [t(locale, 'reconnect_rate_limits_unavailable')]),
       ];
       await this.host.messages.sendMessage(scopeId, lines.join('\n'));
@@ -102,6 +114,13 @@ export class ServiceControlCoordinator {
     }
     return true;
   }
+}
+
+function formatAccountIdentityLabel(snapshot: AccountIdentitySnapshot): string {
+  const primary = snapshot.email ?? snapshot.name ?? snapshot.accountId ?? snapshot.authMode ?? 'unknown';
+  const details = [snapshot.authMode, snapshot.accountId ? `id:${snapshot.accountId.slice(0, 8)}` : null]
+    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index) as string[];
+  return details.length > 0 ? `${primary} (${details.join(', ')})` : primary;
 }
 
 function spawnRestartScript(scopeId: string, locale: AppLocale): void {

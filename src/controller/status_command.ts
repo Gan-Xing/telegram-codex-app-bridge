@@ -2,7 +2,7 @@ import { resolveEngineCapabilities, type EngineProvider } from '../engine/types.
 import { t } from '../i18n.js';
 import type { Logger } from '../logger.js';
 import type { BridgeStore } from '../store/database.js';
-import type { AccountRateLimitSnapshot, AppLocale } from '../types.js';
+import type { AccountIdentitySnapshot, AccountRateLimitSnapshot, AppLocale } from '../types.js';
 import {
   formatAccessPresetLabel,
   formatApprovalPolicyLabel,
@@ -42,6 +42,7 @@ export class StatusCommandCoordinator {
     const binding = this.host.store.getBinding(scopeId);
     const settings = this.host.store.getChatSettings(scopeId);
     const access = this.host.resolveEffectiveAccess(scopeId);
+    const accountIdentity = await this.readStatusAccountIdentity();
     const rateLimits = await this.readStatusRateLimits();
     const capabilities = this.capabilities;
     this.host.updateStatus();
@@ -49,6 +50,9 @@ export class StatusCommandCoordinator {
       t(locale, 'status_engine', { value: formatBridgeEngineLabel(locale, this.host.config.bridgeEngine) }),
       t(locale, 'status_instance', { value: this.host.config.bridgeInstanceId ?? t(locale, 'none') }),
       t(locale, 'status_connected', { value: t(locale, this.host.app.isConnected() ? 'yes' : 'no') }),
+      accountIdentity
+        ? t(locale, 'status_account_identity', { value: formatAccountIdentityLabel(accountIdentity) })
+        : null,
       t(locale, 'status_last_error', { value: this.host.lastError() ?? t(locale, 'none') }),
       t(locale, 'status_user_agent', { value: this.host.app.getUserAgent() ?? t(locale, 'unknown') }),
       t(locale, 'status_current_thread', { value: binding?.threadId ?? t(locale, 'none') }),
@@ -117,6 +121,17 @@ export class StatusCommandCoordinator {
       return typeof this.host.app.getAccountRateLimits === 'function' ? this.host.app.getAccountRateLimits() : null;
     }
   }
+
+  private async readStatusAccountIdentity(): Promise<AccountIdentitySnapshot | null> {
+    if (typeof this.host.app.readAccountIdentity === 'function') {
+      try {
+        return await this.host.app.readAccountIdentity();
+      } catch (error) {
+        this.host.logger.warn('codex.account_identity_status_failed', { error: String(error) });
+      }
+    }
+    return typeof this.host.app.getAccountIdentity === 'function' ? this.host.app.getAccountIdentity() : null;
+  }
 }
 
 export function formatRateLimitStatusLines(locale: AppLocale, snapshot: AccountRateLimitSnapshot | null): string[] {
@@ -172,4 +187,11 @@ function formatRateLimitResetAt(locale: AppLocale, resetsAt: number | null): str
     return t(locale, 'unknown');
   }
   return new Date(resetsAt * 1000).toISOString();
+}
+
+function formatAccountIdentityLabel(snapshot: AccountIdentitySnapshot): string {
+  const primary = snapshot.email ?? snapshot.name ?? snapshot.accountId ?? snapshot.authMode ?? 'unknown';
+  const details = [snapshot.authMode, snapshot.accountId ? `id:${snapshot.accountId.slice(0, 8)}` : null]
+    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index) as string[];
+  return details.length > 0 ? `${primary} (${details.join(', ')})` : primary;
 }

@@ -273,6 +273,13 @@ export interface AccountRateLimitSnapshot {
   planType: string | null;
 }
 
+export interface AccountIdentitySnapshot {
+  email: string | null;
+  name: string | null;
+  authMode: string | null;
+  accountId: string | null;
+}
+
 export interface RuntimeStatus {
   engine: 'codex' | 'gemini';
   instanceId: string | null;

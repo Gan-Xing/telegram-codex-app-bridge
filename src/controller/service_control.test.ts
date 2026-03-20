@@ -25,6 +25,17 @@ function makeHost(overrides: Record<string, unknown> = {}) {
       isConnected() {
         return this.connected;
       },
+      async readAccountIdentity() {
+        return {
+          email: 'ganxingus@gmail.com',
+          name: 'GanXing',
+          authMode: 'chatgpt',
+          accountId: 'f2275ca4-b687-40c4-8015-83ef40559ee6',
+        };
+      },
+      getAccountIdentity() {
+        return null;
+      },
       async readAccountRateLimits() {
         return {
           limitId: 'codex',
@@ -94,6 +105,7 @@ test('reconnect refreshes the codex session and reports rate limits', async () =
   assert.equal(host.runtimeStatus.cleared, 1);
   assert.equal(host.sentMessages.length, 2);
   assert.match(host.sentMessages[1]?.text ?? '', /Codex 会话已刷新/);
+  assert.match(host.sentMessages[1]?.text ?? '', /账号：ganxingus@gmail.com \(chatgpt, id:f2275ca4\)/);
   assert.match(host.sentMessages[1]?.text ?? '', /5小时额度：已用 11%/);
   assert.match(host.sentMessages[1]?.text ?? '', /本周额度：已用 54%/);
 });

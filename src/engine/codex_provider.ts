@@ -61,6 +61,14 @@ export class CodexEngineProvider extends EventEmitter implements EngineProvider 
     return this.client.getUserAgent();
   }
 
+  getAccountIdentity() {
+    return this.client.getAccountIdentity();
+  }
+
+  readAccountIdentity() {
+    return this.client.readAccountIdentity();
+  }
+
   getAccountRateLimits() {
     return this.client.getAccountRateLimits();
   }

@@ -1,4 +1,5 @@
 import type {
+  AccountIdentitySnapshot,
   AccountRateLimitSnapshot,
   AppThread,
   AppThreadWithTurns,
@@ -127,6 +128,8 @@ export interface EngineProvider {
   stop(): Promise<void>;
   isConnected(): boolean;
   getUserAgent(): string | null;
+  getAccountIdentity?(): AccountIdentitySnapshot | null;
+  readAccountIdentity?(): Promise<AccountIdentitySnapshot | null>;
   getAccountRateLimits?(): AccountRateLimitSnapshot | null;
   readAccountRateLimits?(): Promise<AccountRateLimitSnapshot | null>;
 

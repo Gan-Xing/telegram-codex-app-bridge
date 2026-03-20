@@ -102,6 +102,17 @@ function makeApp(options: {
     getUserAgent() {
       return 'test-agent';
     },
+    async readAccountIdentity() {
+      return {
+        email: 'ganxingus@gmail.com',
+        name: 'GanXing',
+        authMode: 'chatgpt',
+        accountId: 'f2275ca4-b687-40c4-8015-83ef40559ee6',
+      };
+    },
+    getAccountIdentity() {
+      return null;
+    },
     async readAccountRateLimits() {
       if (!options.readAccountRateLimits) {
         return {
@@ -160,6 +171,7 @@ test('/status shows 5-hour and weekly rate limit usage', async () => {
     await composition.telegramRouter.handleCommand(makeTextEvent('/status'), 'zh', 'status', []);
 
     const text = bot.messages[0]?.text ?? '';
+    assert.match(text, /账号：ganxingus@gmail.com \(chatgpt, id:f2275ca4\)/);
     assert.match(text, /最近错误：Insufficient quota/);
     assert.match(text, /账户套餐：plus/);
     assert.match(text, /5小时额度：已用 37%/);

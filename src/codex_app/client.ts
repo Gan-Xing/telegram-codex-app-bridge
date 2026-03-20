@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
 import type { Logger } from '../logger.js';
@@ -13,6 +16,7 @@ import type {
   SteerTurnOptions,
 } from '../engine/types.js';
 import type {
+  AccountIdentitySnapshot,
   AccountRateLimitSnapshot,
   AppThread,
   AppThreadTurn,
@@ -68,6 +72,7 @@ export class CodexAppClient extends EventEmitter {
   private port: number | null = null;
   private connected = false;
   private userAgent: string | null = null;
+  private accountIdentity: AccountIdentitySnapshot | null = null;
   private accountRateLimits: AccountRateLimitSnapshot | null = null;
 
   constructor(
@@ -88,8 +93,17 @@ export class CodexAppClient extends EventEmitter {
     return this.userAgent;
   }
 
+  getAccountIdentity(): AccountIdentitySnapshot | null {
+    return this.accountIdentity;
+  }
+
   getAccountRateLimits(): AccountRateLimitSnapshot | null {
     return this.accountRateLimits;
+  }
+
+  async readAccountIdentity(): Promise<AccountIdentitySnapshot | null> {
+    this.accountIdentity = readCodexAccountIdentity();
+    return this.accountIdentity;
   }
 
   async start(): Promise<void> {
@@ -332,6 +346,9 @@ export class CodexAppClient extends EventEmitter {
     });
     this.userAgent = (result as any).userAgent ?? null;
     this.send({ jsonrpc: '2.0', method: 'initialized' });
+    void this.readAccountIdentity().catch((error) => {
+      this.logger.warn('codex.account_identity_read_failed', { error: String(error) });
+    });
     void this.readAccountRateLimits().catch((error) => {
       this.logger.warn('codex.account_rate_limits_read_failed', { error: String(error) });
     });
@@ -394,6 +411,7 @@ export class CodexAppClient extends EventEmitter {
     if (this.connected) {
       this.connected = false;
     }
+    this.accountIdentity = null;
     this.accountRateLimits = null;
     this.rejectPending(new Error(`codex app-server disconnected: ${JSON.stringify(meta)}`));
     this.emit('disconnected', meta);
@@ -421,6 +439,67 @@ export class CodexAppClient extends EventEmitter {
       }
     }, 1500);
   }
+}
+
+function readCodexAccountIdentity(
+  authPath = path.join(os.homedir(), '.codex', 'auth.json'),
+): AccountIdentitySnapshot | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(authPath, 'utf8')) as {
+      auth_mode?: unknown;
+      account_id?: unknown;
+      tokens?: {
+        id_token?: unknown;
+        access_token?: unknown;
+      };
+    };
+    const idPayload = decodeJwtPayload(typeof raw.tokens?.id_token === 'string' ? raw.tokens.id_token : null);
+    const accessPayload = decodeJwtPayload(typeof raw.tokens?.access_token === 'string' ? raw.tokens.access_token : null);
+    const profile = accessPayload?.['https://api.openai.com/profile'];
+    const auth = idPayload?.['https://api.openai.com/auth'];
+    return {
+      email: firstString(
+        profile && typeof profile === 'object' ? (profile as Record<string, unknown>).email : null,
+        idPayload?.email,
+      ),
+      name: firstString(idPayload?.name),
+      authMode: firstString(raw.auth_mode, idPayload?.auth_provider),
+      accountId: firstString(
+        raw.account_id,
+        auth && typeof auth === 'object' ? (auth as Record<string, unknown>).chatgpt_account_id : null,
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(token: string | null): Record<string, unknown> | null {
+  if (!token) {
+    return null;
+  }
+  const parts = token.split('.');
+  if (parts.length < 2 || !parts[1]) {
+    return null;
+  }
+  try {
+    const normalized = parts[1]
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(parts[1].length / 4) * 4, '=');
+    return JSON.parse(Buffer.from(normalized, 'base64').toString('utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
 }
 
 async function reservePort(): Promise<number> {
