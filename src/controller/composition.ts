@@ -66,7 +66,11 @@ export function createBridgeComposition(
   const locks = new ScopeLockRegistry();
   const activeTurns = runtime.turns;
   const attachedThreads = runtime.attachedThreads;
-  const messages = new TelegramMessageService(bot);
+  const messages = new TelegramMessageService(bot, {
+    audit: (direction, scopeId, eventType, summary) => {
+      store.insertAudit(direction, scopeId, eventType, summary);
+    },
+  });
   const runtimeStatus = new RuntimeStatusStore(config, store, app, activeTurns);
 
   const localeForChat = (scopeId: string, languageCode?: string | null): AppLocale => {

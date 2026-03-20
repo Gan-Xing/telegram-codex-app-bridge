@@ -8,6 +8,10 @@ export interface TelegramApiResult<T> {
   ok: boolean;
   result?: T;
   description?: string;
+  error_code?: number;
+  parameters?: {
+    retry_after?: number;
+  };
 }
 
 export interface TelegramRemoteFile {

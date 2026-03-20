@@ -56,6 +56,8 @@ interface GeminiActiveTurn {
   timeoutTriggered: boolean;
   stderr: string[];
   pendingError: string | null;
+  pendingDeltas: string[];
+  streamTimer: NodeJS.Timeout | null;
 }
 
 const DEFAULT_GEMINI_MODEL_CATALOG = [
@@ -65,6 +67,9 @@ const DEFAULT_GEMINI_MODEL_CATALOG = [
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
 ] as const;
+
+const GEMINI_STREAM_CHUNK_SIZE = 160;
+const GEMINI_STREAM_INTERVAL_MS = 120;
 
 export class GeminiEngineProvider extends EventEmitter implements EngineProvider {
   readonly engine = 'gemini' as const;
@@ -271,6 +276,8 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
       timeoutTriggered: false,
       stderr: [],
       pendingError: null,
+      pendingDeltas: [],
+      streamTimer: null,
     });
 
     return { id: turnId, status: 'in_progress' };
@@ -375,26 +382,15 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
         }
         this.completeReasoningIfNeeded(active);
         this.startAssistantIfNeeded(active);
-        active.finalText += event.content;
-        this.emitNotification({
-          method: 'item/agentMessage/delta',
-          params: {
-            turnId: active.turnId,
-            itemId: active.itemId,
-            phase: 'final',
-            delta: event.content,
-          },
-        });
+        this.enqueueGeminiDeltas(active, event.content);
         return;
       }
       case 'tool_use': {
-        const toolId = typeof event.tool_id === 'string' && event.tool_id ? event.tool_id : `gemini-tool-${crypto.randomBytes(4).toString('hex')}`;
-        this.emitToolNotification('codex/event/exec_command_begin', active, toolId, event.tool_name ?? 'tool', event.parameters ?? {});
+        // Hide Gemini tool events in Telegram to avoid noisy output.
         return;
       }
       case 'tool_result': {
-        const toolId = typeof event.tool_id === 'string' && event.tool_id ? event.tool_id : `gemini-tool-${crypto.randomBytes(4).toString('hex')}`;
-        this.emitToolNotification('codex/event/exec_command_end', active, toolId, 'tool', { status: event.status ?? null, output: event.output ?? null });
+        // Hide Gemini tool results in Telegram to avoid noisy output.
         return;
       }
       case 'error': {
@@ -403,6 +399,7 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
       }
       case 'result': {
         this.completeReasoningIfNeeded(active);
+        this.flushGeminiDeltas(active);
         this.completeAssistantIfNeeded(active);
         const errorText = active.pendingError ?? extractGeminiErrorText(event.error);
         this.completeTurn(active, event.status === 'success' ? 'success' : 'error', errorText);
@@ -477,6 +474,7 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
       }
       this.startAssistantIfNeeded(active);
     }
+    this.flushGeminiDeltas(active);
     this.emitNotification({
       method: 'item/completed',
       params: {
@@ -500,6 +498,7 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
       return;
     }
     active.completed = true;
+    this.flushGeminiDeltas(active);
     if (status !== 'success') {
       this.logger.warn('gemini.turn_failed', {
         turnId: active.turnId,
@@ -538,6 +537,63 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
         },
       },
     });
+  }
+
+  private enqueueGeminiDeltas(active: GeminiActiveTurn, content: string): void {
+    const parts = chunkText(content, GEMINI_STREAM_CHUNK_SIZE);
+    active.pendingDeltas.push(...parts);
+    if (!active.streamTimer) {
+      this.scheduleGeminiDeltaFlush(active);
+    }
+  }
+
+  private scheduleGeminiDeltaFlush(active: GeminiActiveTurn): void {
+    active.streamTimer = setTimeout(() => {
+      active.streamTimer = null;
+      if (active.completed) {
+        return;
+      }
+      const next = active.pendingDeltas.shift();
+      if (!next) {
+        return;
+      }
+      active.finalText += next;
+      this.emitNotification({
+        method: 'item/agentMessage/delta',
+        params: {
+          turnId: active.turnId,
+          itemId: active.itemId,
+          phase: 'final',
+          delta: next,
+        },
+      });
+      if (active.pendingDeltas.length > 0) {
+        this.scheduleGeminiDeltaFlush(active);
+      }
+    }, GEMINI_STREAM_INTERVAL_MS);
+  }
+
+  private flushGeminiDeltas(active: GeminiActiveTurn): void {
+    if (active.streamTimer) {
+      clearTimeout(active.streamTimer);
+      active.streamTimer = null;
+    }
+    while (active.pendingDeltas.length > 0) {
+      const next = active.pendingDeltas.shift();
+      if (!next) {
+        continue;
+      }
+      active.finalText += next;
+      this.emitNotification({
+        method: 'item/agentMessage/delta',
+        params: {
+          turnId: active.turnId,
+          itemId: active.itemId,
+          phase: 'final',
+          delta: next,
+        },
+      });
+    }
   }
 
   private emitNotification(notification: EngineNotification): void {
@@ -672,6 +728,18 @@ function extractGeminiErrorText(value: unknown): string | null {
     }
   }
   return null;
+}
+
+function chunkText(value: string, size: number): string[] {
+  const chunks: string[] = [];
+  if (!value) {
+    return chunks;
+  }
+  const normalizedSize = Math.max(1, size);
+  for (let index = 0; index < value.length; index += normalizedSize) {
+    chunks.push(value.slice(index, index + normalizedSize));
+  }
+  return chunks;
 }
 
 function buildGeminiPrompt(input: TurnInput[], developerInstructions: string | null): string {
