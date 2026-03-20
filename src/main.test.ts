@@ -49,6 +49,12 @@ test('doctor warns but does not fail when desktop open is unavailable', () => {
     'fi',
     'exit 0',
   ]);
+  const fakeWhich = createFakeCli(tempDir, 'which', [
+    'if [[ "${1:-}" == "xdg-open" ]]; then',
+    '  exit 1',
+    'fi',
+    'command -v "${1:-}" >/dev/null 2>&1',
+  ]);
   const defaultCwd = path.join(tempDir, 'workspace');
   fs.mkdirSync(defaultCwd, { recursive: true });
 
@@ -57,11 +63,11 @@ test('doctor warns but does not fail when desktop open is unavailable', () => {
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: tempDir,
+      PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ''}`,
       CODEX_CLI_BIN: fakeCodex,
-      TG_BOT_TOKEN: 'dummy-token',
-      TG_ALLOWED_USER_ID: '1',
       DEFAULT_CWD: defaultCwd,
+      TG_ALLOWED_USER_ID: '1',
+      TG_BOT_TOKEN: 'dummy-token',
     },
   });
 
