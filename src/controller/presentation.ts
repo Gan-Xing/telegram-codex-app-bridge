@@ -20,6 +20,7 @@ import type { ResolvedAccessMode } from './access.js';
 type InlineButton = { text: string; callback_data: string };
 
 interface ThreadLike {
+  index?: number;
   threadId: string;
   name: string | null;
   preview: string;
@@ -30,6 +31,14 @@ interface ThreadLike {
 }
 
 export type ThreadHistoryPreviewStatus = 'complete' | 'partial' | 'failed' | 'interrupted';
+
+export interface ThreadListPresentationState {
+  offset: number;
+  pageSize: number;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+  searchTerm?: string | null;
+}
 
 export interface ThreadHistoryPreviewTurn {
   userText: string | null;
@@ -42,6 +51,7 @@ export function formatThreadsMessage(
   threads: ThreadLike[],
   currentThreadId: string | null,
   searchTerm?: string | null,
+  state?: ThreadListPresentationState,
 ): string {
   if (threads.length === 0) {
     return searchTerm
@@ -58,6 +68,12 @@ export function formatThreadsMessage(
   if (searchTerm) {
     headerLines.push(t(locale, 'threads_filter', { searchTerm: escapeTelegramHtml(searchTerm) }));
   }
+  if (state) {
+    headerLines.push(t(locale, 'threads_range', {
+      start: state.offset + 1,
+      end: state.offset + threads.length,
+    }));
+  }
   if (currentThread) {
     const currentTitle = truncate(compactWhitespace(currentThread.name || currentThread.preview || t(locale, 'empty')), 40);
     headerLines.push(t(locale, 'threads_current', { title: escapeTelegramHtml(currentTitle) }));
@@ -72,12 +88,35 @@ export function formatThreadsMessage(
 
 export function buildThreadsKeyboard(locale: AppLocale, threads: ThreadLike[]): Array<Array<{ text: string; callback_data: string }>> {
   return threads.map((thread, index) => {
-    const title = `${index + 1}. ${truncate(compactWhitespace(thread.name || thread.preview || t(locale, 'empty')), 22)}`;
+    const ordinal = typeof thread.index === 'number' ? thread.index + 1 : index + 1;
+    const title = `${ordinal}. ${truncate(compactWhitespace(thread.name || thread.preview || t(locale, 'empty')), 22)}`;
     return [
       { text: title, callback_data: `thread:open:${thread.threadId}` },
       { text: t(locale, 'button_rename'), callback_data: `thread:rename:start:${thread.threadId}` },
     ];
   });
+}
+
+export function buildThreadListKeyboard(
+  locale: AppLocale,
+  threads: ThreadLike[],
+  state: ThreadListPresentationState,
+): Array<Array<{ text: string; callback_data: string }>> {
+  const rows = buildThreadsKeyboard(locale, threads);
+  const navigationRow: InlineButton[] = [];
+  if (state.hasPreviousPage) {
+    navigationRow.push({ text: t(locale, 'button_prev_page'), callback_data: 'thread:list:prev' });
+  }
+  if (state.hasNextPage) {
+    navigationRow.push({ text: t(locale, 'button_next_page'), callback_data: 'thread:list:next' });
+  }
+  if (navigationRow.length > 0) {
+    rows.push(navigationRow);
+  }
+  if (state.searchTerm) {
+    rows.push([{ text: t(locale, 'button_clear_filter'), callback_data: 'thread:list:clear' }]);
+  }
+  return rows;
 }
 
 export function formatThreadHistoryPreviewMessage(

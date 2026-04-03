@@ -99,6 +99,14 @@ export class TelegramIngressRouter {
         ),
       },
       {
+        pattern: /^thread:list:(prev|next|clear)$/,
+        handle: (event, match, locale) => this.host.threadPanels.handleThreadListNavigationCallback(
+          event,
+          match[1]! as 'prev' | 'next' | 'clear',
+          locale,
+        ),
+      },
+      {
         pattern: /^nav:(models|mode|threads|reveal|permissions)$/,
         handle: (event, match, locale) => this.host.settings.handleNavigationCallback(
           event,

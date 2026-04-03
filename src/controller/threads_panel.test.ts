@@ -117,6 +117,15 @@ function makeBot() {
 }
 
 function makeApp() {
+  const allThreads = Array.from({ length: 12 }, (_, index) => ({
+    threadId: `thread-${index + 1}`,
+    name: index === 0 ? 'Primary thread' : `Thread ${index + 1}`,
+    preview: `Preview ${index + 1}`,
+    cwd: '/tmp/demo',
+    modelProvider: 'openai',
+    status: 'idle' as const,
+    updatedAt: 200 - index,
+  }));
   return {
     isConnected() {
       return true;
@@ -124,16 +133,15 @@ function makeApp() {
     getUserAgent() {
       return 'test-agent';
     },
-    async listThreads() {
-      return [{
-        threadId: 'thread-1',
-        name: 'Primary thread',
-        preview: 'Primary preview',
-        cwd: '/tmp/demo',
-        modelProvider: 'openai',
-        status: 'idle',
-        updatedAt: 200,
-      }];
+    async listThreads(options?: { limit?: number; searchTerm?: string | null }) {
+      const filtered = allThreads.filter((thread) => {
+        const term = options?.searchTerm?.trim().toLowerCase();
+        if (!term) {
+          return true;
+        }
+        return `${thread.name} ${thread.preview}`.toLowerCase().includes(term);
+      });
+      return filtered.slice(0, options?.limit ?? filtered.length);
     },
     async resumeThread({ threadId }: { threadId: string }) {
       return {
@@ -198,10 +206,62 @@ test('threads panel renders inline keyboard buttons', async () => {
 
     assert.equal(bot.htmlMessages.length, 1);
     assert.match(bot.htmlMessages[0]?.text ?? '', /Recent threads/);
-    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard, [[
+    assert.match(bot.htmlMessages[0]?.text ?? '', /Showing 1-10/);
+    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(0), [
       { text: '1. Primary thread', callback_data: 'thread:open:thread-1' },
       { text: 'Rename', callback_data: 'thread:rename:start:thread-1' },
-    ]]);
+    ]);
+    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(-1), [
+      { text: 'Next', callback_data: 'thread:list:next' },
+    ]);
+  });
+});
+
+test('threads panel paginates and can clear a search filter', async () => {
+  await withComposition(async (composition, _store, bot) => {
+    await composition.threadPanels.showThreadsPanel('chat-1', undefined, 'thread 1', 'en');
+    const panelMessageId = bot.htmlMessages[0]!.messageId;
+
+    assert.match(bot.htmlMessages[0]?.text ?? '', /Filter: <code>thread 1<\/code>/);
+    assert.match(bot.htmlMessages[0]?.text ?? '', /Showing 1-3/);
+    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(-1), [
+      { text: 'Clear filter', callback_data: 'thread:list:clear' },
+    ]);
+
+    await composition.threadPanels.handleThreadListNavigationCallback(
+      makeCallbackEvent(panelMessageId, { data: 'thread:list:clear', callbackQueryId: 'cb-clear' }),
+      'clear',
+      'en',
+    );
+
+    assert.equal(bot.htmlEdits.length, 1);
+    assert.match(bot.htmlEdits[0]?.text ?? '', /Showing 1-10/);
+    assert.doesNotMatch(bot.htmlEdits[0]?.text ?? '', /Filter:/);
+    assert.deepEqual(bot.callbackAnswers.at(-1), { id: 'cb-clear', text: 'Filter cleared' });
+  });
+});
+
+test('threads panel next callback advances to the next page', async () => {
+  await withComposition(async (composition, _store, bot) => {
+    await composition.threadPanels.showThreadsPanel('chat-1', undefined, null, 'en');
+    const panelMessageId = bot.htmlMessages[0]!.messageId;
+
+    await composition.threadPanels.handleThreadListNavigationCallback(
+      makeCallbackEvent(panelMessageId, { data: 'thread:list:next', callbackQueryId: 'cb-next' }),
+      'next',
+      'en',
+    );
+
+    assert.equal(bot.htmlEdits.length, 1);
+    assert.match(bot.htmlEdits[0]?.text ?? '', /Showing 11-12/);
+    assert.deepEqual(bot.htmlEdits[0]?.inlineKeyboard?.at(0), [
+      { text: '11. Thread 11', callback_data: 'thread:open:thread-11' },
+      { text: 'Rename', callback_data: 'thread:rename:start:thread-11' },
+    ]);
+    assert.deepEqual(bot.htmlEdits[0]?.inlineKeyboard?.at(-1), [
+      { text: 'Prev', callback_data: 'thread:list:prev' },
+    ]);
+    assert.deepEqual(bot.callbackAnswers.at(-1), { id: 'cb-next', text: 'Decision recorded' });
   });
 });
 

@@ -13,14 +13,16 @@ import type { EngineProvider } from '../engine/types.js';
 import type { TelegramCallbackEvent } from '../telegram/gateway.js';
 import { classifyAgentOutput } from './activity.js';
 import {
-  buildThreadsKeyboard,
+  buildThreadListKeyboard,
   formatThreadHistoryPreviewMessage,
   formatThreadsMessage,
+  type ThreadListPresentationState,
   type ThreadHistoryPreviewTurn,
 } from './presentation.js';
 
 type InlineKeyboard = Array<Array<{ text: string; callback_data: string }>>;
 type ThreadRenameAction = 'start' | 'confirm' | 'cancel';
+type ThreadListNavigationAction = 'prev' | 'next' | 'clear';
 
 interface ThreadRenameDraft {
   threadId: string;
@@ -51,11 +53,13 @@ const THREAD_HISTORY_PREVIEW_TURN_LIMIT = 3;
 
 export class ThreadPanelCoordinator {
   private readonly threadRenameDrafts = new Map<string, ThreadRenameDraft>();
+  private readonly threadListState = new Map<string, ThreadListPresentationState>();
 
   constructor(private readonly host: ThreadPanelHost) {}
 
   clearDrafts(): void {
     this.threadRenameDrafts.clear();
+    this.threadListState.clear();
   }
 
   async showThreadsPanel(
@@ -63,14 +67,27 @@ export class ThreadPanelCoordinator {
     messageId: number | undefined,
     searchTerm: string | null | undefined,
     locale: AppLocale,
+    options: { offset?: number } = {},
   ): Promise<void> {
     const binding = this.host.store.getBinding(scopeId);
+    const pageSize = Math.max(1, this.host.config.threadListLimit);
+    const offset = Math.max(0, options.offset ?? 0);
     const threads = await this.host.app.listThreads({
-      limit: this.host.config.threadListLimit,
+      limit: offset + pageSize + 1,
       searchTerm: searchTerm ?? null,
     });
-    const cached: CachedThread[] = threads.map((thread, index) => ({
-      index,
+    const visibleThreads = threads.slice(offset, offset + pageSize);
+    const hasNextPage = threads.length > offset + visibleThreads.length;
+    const presentationState: ThreadListPresentationState = {
+      offset,
+      pageSize,
+      hasPreviousPage: offset > 0,
+      hasNextPage,
+      searchTerm: searchTerm ?? null,
+    };
+    this.threadListState.set(scopeId, presentationState);
+    const cached: CachedThread[] = visibleThreads.map((thread, index) => ({
+      index: offset + index,
       threadId: thread.threadId,
       name: this.host.store.getThreadNameOverride(scopeId, thread.threadId) ?? thread.name,
       preview: thread.preview,
@@ -80,13 +97,35 @@ export class ThreadPanelCoordinator {
       updatedAt: thread.updatedAt,
     }));
     this.host.store.cacheThreadList(scopeId, cached);
-    const text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null);
-    const keyboard = buildThreadsKeyboard(locale, cached);
+    const text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null, presentationState);
+    const keyboard = buildThreadListKeyboard(locale, cached, presentationState);
     if (messageId !== undefined) {
       await this.host.editHtmlMessage(scopeId, messageId, text, keyboard);
       return;
     }
     await this.host.sendHtmlMessage(scopeId, text, keyboard);
+  }
+
+  async handleThreadListNavigationCallback(
+    event: TelegramCallbackEvent,
+    action: ThreadListNavigationAction,
+    locale: AppLocale,
+  ): Promise<void> {
+    const state = this.threadListState.get(event.scopeId) ?? {
+      offset: 0,
+      pageSize: Math.max(1, this.host.config.threadListLimit),
+      hasPreviousPage: false,
+      hasNextPage: false,
+      searchTerm: null,
+    };
+    const nextOffset = action === 'prev'
+      ? Math.max(0, state.offset - state.pageSize)
+      : action === 'next'
+        ? state.offset + state.pageSize
+        : 0;
+    const nextSearchTerm = action === 'clear' ? null : (state.searchTerm ?? null);
+    await this.showThreadsPanel(event.scopeId, event.messageId, nextSearchTerm, locale, { offset: nextOffset });
+    await this.host.answerCallback(event.callbackQueryId, t(locale, action === 'clear' ? 'threads_filter_cleared_short' : 'decision_recorded'));
   }
 
   async handleThreadOpenCallback(event: TelegramCallbackEvent, threadId: string, locale: AppLocale): Promise<void> {
@@ -103,12 +142,19 @@ export class ThreadPanelCoordinator {
     }
 
     const threads = this.host.store.listCachedThreads(scopeId);
+    const state = this.threadListState.get(scopeId) ?? null;
     if (threads.length > 0) {
       await this.host.editHtmlMessage(
         scopeId,
         event.messageId,
-        formatThreadsMessage(locale, threads, binding.threadId),
-        buildThreadsKeyboard(locale, threads),
+        formatThreadsMessage(locale, threads, binding.threadId, state?.searchTerm ?? null, state ?? undefined),
+        buildThreadListKeyboard(locale, threads, state ?? {
+          offset: 0,
+          pageSize: threads.length,
+          hasPreviousPage: false,
+          hasNextPage: false,
+          searchTerm: null,
+        }),
       );
     }
 
@@ -165,7 +211,8 @@ export class ThreadPanelCoordinator {
     await this.resolveThreadRenameDraft(scopeId, draft, t(locale, 'thread_rename_updated', { value: draft.proposedName }));
     await this.host.answerCallback(event.callbackQueryId, t(locale, 'decision_recorded'));
     try {
-      await this.showThreadsPanel(scopeId, undefined, undefined, locale);
+      const state = this.threadListState.get(scopeId) ?? null;
+      await this.showThreadsPanel(scopeId, undefined, state?.searchTerm ?? null, locale, { offset: state?.offset ?? 0 });
     } catch (error) {
       this.host.logger.warn('thread.rename_refresh_failed', { scopeId, threadId, error: String(error) });
     }

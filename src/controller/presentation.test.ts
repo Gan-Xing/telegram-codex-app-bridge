@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAccessSettingsKeyboard,
+  buildThreadListKeyboard,
   buildModeSettingsKeyboard,
   buildModelSettingsKeyboard,
   buildSettingsHomeKeyboard,
@@ -37,9 +38,16 @@ test('formatThreadsMessage highlights current thread and metadata', () => {
     },
   ];
 
-  const rendered = formatThreadsMessage('en', threads, 'thread-1');
+  const rendered = formatThreadsMessage('en', threads, 'thread-1', null, {
+    offset: 0,
+    pageSize: 10,
+    hasPreviousPage: false,
+    hasNextPage: false,
+    searchTerm: null,
+  });
   assert.match(rendered, /<b>Recent threads<\/b>/);
   assert.match(rendered, /Tap a button below to open or rename a thread/);
+  assert.match(rendered, /Showing 1-1/);
   assert.match(rendered, /Current: <b>Fix Telegram bridge<\/b>/);
   assert.match(rendered, /project \| 2m ago/);
 });
@@ -57,8 +65,15 @@ test('formatThreadsMessage escapes html and shows filter', () => {
     },
   ];
 
-  const rendered = formatThreadsMessage('en', threads, null, 'auth <bug>');
+  const rendered = formatThreadsMessage('en', threads, null, 'auth <bug>', {
+    offset: 10,
+    pageSize: 10,
+    hasPreviousPage: true,
+    hasNextPage: true,
+    searchTerm: 'auth <bug>',
+  });
   assert.match(rendered, /Filter: <code>auth &lt;bug&gt;<\/code>/);
+  assert.match(rendered, /Showing 11-11/);
   assert.doesNotMatch(rendered, /Review <auth> flow/);
 });
 
@@ -83,6 +98,51 @@ test('buildThreadsKeyboard creates open and rename buttons per thread', () => {
     {
       text: 'Rename',
       callback_data: 'thread:rename:start:thread-2',
+    },
+  ]]);
+});
+
+test('buildThreadListKeyboard adds pagination and clear-filter controls', () => {
+  const threads: AppThread[] = [
+    {
+      threadId: 'thread-2',
+      name: 'Review auth flow',
+      preview: 'Review auth flow',
+      cwd: '/tmp/repo',
+      modelProvider: 'openai',
+      status: 'active',
+      updatedAt: Math.floor(Date.now() / 1000) - 30,
+    },
+  ];
+
+  assert.deepEqual(buildThreadListKeyboard('en', threads, {
+    offset: 10,
+    pageSize: 10,
+    hasPreviousPage: true,
+    hasNextPage: true,
+    searchTerm: 'auth',
+  }), [[
+    {
+      text: '1. Review auth flow',
+      callback_data: 'thread:open:thread-2',
+    },
+    {
+      text: 'Rename',
+      callback_data: 'thread:rename:start:thread-2',
+    },
+  ], [
+    {
+      text: 'Prev',
+      callback_data: 'thread:list:prev',
+    },
+    {
+      text: 'Next',
+      callback_data: 'thread:list:next',
+    },
+  ], [
+    {
+      text: 'Clear filter',
+      callback_data: 'thread:list:clear',
     },
   ]]);
 });
