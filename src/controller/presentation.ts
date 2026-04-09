@@ -117,6 +117,85 @@ export function buildAccessSettingsKeyboard(locale: AppLocale, access: ResolvedA
   return [buttons];
 }
 
+/** Threads row shape for Weixin copy-paste lines (matches cached thread list fields). */
+export interface WeixinCopyPasteThreadRow {
+  threadId: string;
+  name: string | null;
+  preview: string;
+}
+
+export function formatWeixinThreadsCopyPaste(
+  locale: AppLocale,
+  threads: WeixinCopyPasteThreadRow[],
+  searchTerm?: string | null,
+): string {
+  const lines: string[] = [
+    t(locale, 'weixin_copy_paste_divider'),
+    t(locale, 'weixin_copy_threads_title'),
+  ];
+  if (searchTerm?.trim()) {
+    lines.push(t(locale, 'weixin_copy_threads_filter', { term: searchTerm.trim() }));
+  }
+  if (threads.length === 0) {
+    lines.push(t(locale, 'weixin_copy_threads_empty'));
+  } else {
+    for (let i = 0; i < threads.length; i += 1) {
+      lines.push(`/open ${i + 1}`);
+    }
+  }
+  lines.push(t(locale, 'weixin_copy_threads_filter_hint'));
+  return lines.join('\n');
+}
+
+export function formatWeixinModelCopyPaste(
+  locale: AppLocale,
+  models: ModelInfo[],
+  settings: ChatSessionSettings | null,
+): string {
+  const effective = resolveCurrentModel(models, settings?.model ?? null);
+  const efforts = effective?.supportedReasoningEfforts.length
+    ? effective.supportedReasoningEfforts
+    : effective
+      ? [effective.defaultReasoningEffort]
+      : (['medium'] as ReasoningEffortValue[]);
+
+  const lines: string[] = [
+    t(locale, 'weixin_copy_paste_divider'),
+    t(locale, 'weixin_copy_models_title'),
+    '/model default',
+    ...models.map((m) => `/model ${m.model}`),
+    '',
+    t(locale, 'weixin_copy_efforts_title'),
+    '/effort default',
+    ...efforts.map((e) => `/effort ${e}`),
+  ];
+  return lines.join('\n');
+}
+
+export function formatWeixinAccessCopyPaste(locale: AppLocale): string {
+  return [
+    t(locale, 'weixin_copy_paste_divider'),
+    t(locale, 'weixin_copy_access_title'),
+    '/access read-only',
+    '/access default',
+    '/access full-access',
+  ].join('\n');
+}
+
+export function formatWeixinWhereNavCopyPaste(locale: AppLocale, hasBinding: boolean): string {
+  const lines = [
+    t(locale, 'weixin_copy_paste_divider'),
+    t(locale, 'weixin_copy_where_nav_title'),
+    '/permissions',
+    '/models',
+    '/threads',
+  ];
+  if (hasBinding) {
+    lines.push('/reveal');
+  }
+  return lines.join('\n');
+}
+
 export function formatModelSettingsMessage(
   locale: AppLocale,
   models: ModelInfo[],

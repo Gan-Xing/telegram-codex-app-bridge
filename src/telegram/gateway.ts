@@ -4,6 +4,7 @@ import { callTelegramApi, downloadTelegramFile, getTelegramFile, type TelegramRe
 import type { BridgeStore } from '../store/database.js';
 import type { Logger } from '../logger.js';
 import { getTelegramCommands } from '../i18n.js';
+import { toTelegramBridgeScopeId } from '../core/bridge_scope.js';
 import { createTelegramScopeId } from './scope.js';
 import type { TelegramMessageEntity } from './addressing.js';
 import type { TelegramInboundAttachment } from './media.js';
@@ -314,7 +315,7 @@ export class TelegramGateway extends EventEmitter {
       const attachments = extractAttachments(update.message);
       const text = update.message.text ?? update.message.caption ?? '';
       const topicId = update.message.message_thread_id ?? null;
-      const scopeId = createTelegramScopeId(String(update.message.chat.id), topicId);
+      const scopeId = toTelegramBridgeScopeId(createTelegramScopeId(String(update.message.chat.id), topicId));
       const entities = update.message.text ? (update.message.entities ?? []) : (update.message.caption_entities ?? []);
       const replyToBot = this.botUserId !== null && update.message.reply_to_message?.from?.id === this.botUserId;
       if (text || attachments.length > 0) {
@@ -342,7 +343,9 @@ export class TelegramGateway extends EventEmitter {
       this.emit('callback', {
         chatId: String(update.callback_query.message.chat.id),
         topicId,
-        scopeId: createTelegramScopeId(String(update.callback_query.message.chat.id), topicId),
+        scopeId: toTelegramBridgeScopeId(
+          createTelegramScopeId(String(update.callback_query.message.chat.id), topicId),
+        ),
         userId: String(update.callback_query.from.id),
         data: update.callback_query.data,
         callbackQueryId: update.callback_query.id,

@@ -6,7 +6,6 @@ import { normalizeLocale, t } from '../i18n.js';
 import type { Logger } from '../logger.js';
 import type { BridgeStore } from '../store/database.js';
 import type {
-  AccessPresetValue,
   AppLocale,
   ModelInfo,
   PendingApprovalRecord,
@@ -27,6 +26,10 @@ import {
   formatModelSettingsMessage,
   formatSandboxModeLabel,
   formatThreadsMessage,
+  formatWeixinAccessCopyPaste,
+  formatWeixinModelCopyPaste,
+  formatWeixinThreadsCopyPaste,
+  formatWeixinWhereNavCopyPaste,
   formatWhereMessage,
   normalizeRequestedEffort,
   resolveCurrentModel,
@@ -42,9 +45,15 @@ import {
   type StagedTelegramAttachment,
   type TelegramInboundAttachment,
 } from '../telegram/media.js';
-import { chunkTelegramMessage, chunkTelegramStreamMessage, clipTelegramDraftMessage } from '../telegram/text.js';
+import {
+  TELEGRAM_MESSAGE_LIMIT,
+  chunkTelegramMessage,
+  chunkTelegramStreamMessage,
+  clipTelegramDraftMessage,
+} from '../telegram/text.js';
 import { isDefaultTelegramScope, resolveTelegramAddressing } from '../telegram/addressing.js';
-import { parseTelegramScopeId } from '../telegram/scope.js';
+import { BridgeMessagingRouter } from '../channels/bridge_messaging_router.js';
+import { BRIDGE_SCOPE_WEIXIN_PREFIX, parseWeixinBridgeScope } from '../core/bridge_scope.js';
 import { resolveTelegramRenderRoute, type TelegramRenderRoute } from '../telegram/rendering.js';
 import type { CodexAppClient, JsonRpcNotification, JsonRpcServerRequest, TurnInput } from '../codex_app/client.js';
 import {
@@ -54,6 +63,13 @@ import {
   type TurnOutputKind,
 } from './activity.js';
 import { normalizeAccessPreset, resolveAccessMode } from './access.js';
+import { diffObservedTurn, findLatestTurn, findLiveTurn, type ObservedTurnCursor } from './observer.js';
+import {
+  applySessionLog,
+  bootstrapSessionLog,
+  splitJsonlChunk,
+  type SessionLogCursor,
+} from './session_observer.js';
 import { renderActiveTurnStatus } from './status.js';
 import { writeRuntimeStatus } from '../runtime.js';
 
@@ -102,6 +118,7 @@ interface ActiveTurn {
   chatId: string;
   topicId: number | null;
   renderRoute: TelegramRenderRoute;
+  isObserved: boolean;
   threadId: string;
   turnId: string;
   previewMessageId: number;
@@ -124,19 +141,49 @@ interface ActiveTurn {
   forceStatusFlush: boolean;
   forceStreamFlush: boolean;
   renderTask: Promise<void> | null;
+  completion: Promise<void>;
+  archivedMessageIds: number[];
   resolver: () => void;
+}
+
+interface ObservedThreadWatcher {
+  scopeId: string;
+  chatId: string;
+  chatType: string;
+  topicId: number | null;
+  threadId: string;
+  mode: 'app_snapshot' | 'session_file';
+  timer: NodeJS.Timeout | null;
+  cursor: ObservedTurnCursor | null;
+  activeTurnId: string | null;
+  waitingOnApproval: boolean;
+  sessionPath: string | null;
+  sessionOffset: number;
+  sessionRemainder: string;
+  sessionCursor: SessionLogCursor;
+  stopped: boolean;
+}
+
+interface QueuedPromptRequest {
+  event: TelegramTextEvent;
+  text: string;
 }
 
 type ApprovalAction = 'accept' | 'session' | 'deny';
 class UserFacingError extends Error {}
+const OBSERVED_THREAD_POLL_MS = 1500;
+const OBSERVED_CLI_USER_LABEL = 'codex-cli-user';
 
-export class BridgeController {
+export class BridgeSessionCore {
   private activeTurns = new Map<string, ActiveTurn>();
+  private observedThreadWatchers = new Map<string, ObservedThreadWatcher>();
+  private queuedPrompts = new Map<string, QueuedPromptRequest>();
   private locks = new Map<string, Promise<void>>();
   private approvalTimers = new Map<string, NodeJS.Timeout>();
   private attachedThreads = new Set<string>();
   private botUsername: string | null = null;
   private lastError: string | null = null;
+  private readonly messaging: BridgeMessagingRouter;
 
   constructor(
     private readonly config: AppConfig,
@@ -144,9 +191,13 @@ export class BridgeController {
     private readonly logger: Logger,
     private readonly bot: TelegramGateway,
     private readonly app: CodexAppClient,
-  ) {}
+    outbound: BridgeMessagingRouter,
+  ) {
+    this.messaging = outbound;
+  }
 
-  async start(): Promise<void> {
+  /** Wire Telegram inbound events. Call before {@link startCodexApp}. */
+  registerTelegramInboundHandlers(): void {
     this.bot.on('text', (event: TelegramTextEvent) => {
       void this.withLock(event.scopeId, async () => this.handleText(event)).catch((error) => {
         void this.handleAsyncError('telegram.text', error, event.scopeId);
@@ -157,6 +208,20 @@ export class BridgeController {
         void this.handleAsyncError('telegram.callback', error, event.scopeId);
       });
     });
+  }
+
+  /**
+   * Deliver an inbound user message through the same pipeline as Telegram `text` events
+   * (used by the Weixin adapter).
+   */
+  dispatchInboundLikeTelegramText(event: TelegramTextEvent): void {
+    void this.withLock(event.scopeId, async () => this.handleText(event)).catch((error) => {
+      void this.handleAsyncError('channel.text', error, event.scopeId);
+    });
+  }
+
+  /** Start Codex app-server transport and attach RPC listeners. */
+  async startCodexApp(): Promise<void> {
     this.app.on('notification', (msg: JsonRpcNotification) => {
       void this.handleNotification(msg).catch((error) => {
         void this.handleAsyncError('codex.notification', error);
@@ -174,6 +239,8 @@ export class BridgeController {
     });
     this.app.on('disconnected', () => {
       this.attachedThreads.clear();
+      this.queuedPrompts.clear();
+      this.clearObservedThreadWatchers();
       void this.abandonActiveTurns().catch((error) => {
         this.logger.error('codex.disconnect_cleanup_failed', { error: toErrorMeta(error) });
       });
@@ -182,12 +249,26 @@ export class BridgeController {
 
     await this.app.start();
     await this.cleanupStaleTurnPreviews();
+    this.updateStatus();
+  }
+
+  /** Begin Telegram Bot API long-polling after handlers and Codex are ready. */
+  async startTelegramPolling(): Promise<void> {
     await this.bot.start();
     this.botUsername = this.bot.username;
     this.updateStatus();
   }
 
+  /** Telegram-only default startup (single channel). */
+  async start(): Promise<void> {
+    this.registerTelegramInboundHandlers();
+    await this.startCodexApp();
+    await this.startTelegramPolling();
+  }
+
   async stop(): Promise<void> {
+    this.queuedPrompts.clear();
+    this.clearObservedThreadWatchers();
     await this.abandonActiveTurns();
     this.bot.stop();
     for (const timer of this.approvalTimers.values()) {
@@ -209,12 +290,30 @@ export class BridgeController {
       activeTurns: this.activeTurns.size,
       lastError: this.lastError,
       updatedAt: new Date().toISOString(),
+      channels: {
+        telegram: true,
+        weixin: Boolean(this.config.wxEnabled && this.messaging.hasWeixinTransport),
+      },
     };
   }
 
   private async handleText(event: TelegramTextEvent): Promise<void> {
     const scopeId = event.scopeId;
     const locale = this.localeForChat(scopeId, event.languageCode);
+    if (scopeId.startsWith(BRIDGE_SCOPE_WEIXIN_PREFIX)) {
+      this.store.insertAudit('inbound', scopeId, 'weixin.message', summarizeTelegramInput(event.text, event.attachments));
+      const command = event.attachments.length === 0 ? parseCommand(event.text) : null;
+      if (command) {
+        await this.handleCommand(event, locale, command.name, command.args);
+        return;
+      }
+      if (this.findActiveTurn(scopeId)) {
+        await this.sendMessage(scopeId, t(locale, 'another_turn_running'));
+        return;
+      }
+      await this.startBoundTurnFromEvent(event, locale, event.text.trim());
+      return;
+    }
     this.store.insertAudit('inbound', scopeId, 'telegram.message', summarizeTelegramInput(event.text, event.attachments));
     const command = event.attachments.length === 0 ? parseCommand(event.text) : null;
     const decision = resolveTelegramAddressing({
@@ -244,22 +343,7 @@ export class BridgeController {
       return;
     }
 
-    const existingBinding = this.store.getBinding(scopeId);
-    const binding = existingBinding
-      ? await this.ensureThreadReady(scopeId, existingBinding)
-      : await this.createBinding(scopeId, null);
-    await this.sendTyping(scopeId);
-    const previewMessageId = 0;
-    try {
-      const input = await this.buildTurnInput(binding, { ...event, text: decision.text }, locale);
-      const turnState = await this.startTurnWithRecovery(scopeId, binding, input);
-      await this.registerActiveTurn(scopeId, event.chatId, event.chatType, event.topicId, turnState.threadId, turnState.turnId, previewMessageId);
-    } catch (error) {
-      if (previewMessageId > 0) {
-        await this.cleanupTransientPreview(scopeId, previewMessageId);
-      }
-      throw error;
-    }
+    await this.startBoundTurnFromEvent(event, locale, decision.text);
   }
 
   private async handleCommand(event: TelegramTextEvent, locale: AppLocale, name: string, args: string[]): Promise<void> {
@@ -267,21 +351,31 @@ export class BridgeController {
     switch (name) {
       case 'start':
       case 'help': {
-        await this.sendMessage(scopeId, [
+        const weixinNote = scopeId.startsWith(BRIDGE_SCOPE_WEIXIN_PREFIX) ? t(locale, 'help_weixin_note') : '';
+        const lines = [
           t(locale, 'help_commands_title'),
           '/help',
           '/status',
           '/threads [query]',
           '/open <n>',
+          '/watch',
+          '/unwatch',
+          '/takeover <message>',
+          '/queue <message>',
           '/new [cwd]',
           '/models',
           '/permissions',
+          '/permissions <read-only|default|full-access>',
           '/reveal',
           '/where',
           '/interrupt',
           t(locale, 'help_advanced_aliases'),
           t(locale, 'help_plain_text_hint'),
-        ].join('\n'));
+        ];
+        if (weixinNote) {
+          lines.push('', weixinNote);
+        }
+        await this.sendMessage(scopeId, lines.join('\n'));
         return;
       }
       case 'status': {
@@ -325,6 +419,8 @@ export class BridgeController {
           await this.sendMessage(scopeId, t(locale, 'unknown_cached_thread'));
           return;
         }
+        this.queuedPrompts.delete(scopeId);
+        await this.stopWatchingScopeThread(scopeId, thread.threadId);
         let binding: ThreadBinding;
         try {
           binding = await this.bindCachedThread(scopeId, thread.threadId);
@@ -350,8 +446,47 @@ export class BridgeController {
         await this.sendMessage(scopeId, lines.join('\n'));
         return;
       }
+      case 'watch': {
+        const binding = this.store.getBinding(scopeId);
+        if (!binding) {
+          await this.sendMessage(scopeId, t(locale, 'watch_no_thread_bound'));
+          return;
+        }
+        const watch = await this.watchThread(scopeId, event.chatId, event.chatType, event.topicId, binding);
+        const watchedThreadId = watch.threadId;
+        const mode = watch.mode;
+        if (mode === 'already') {
+          await this.sendMessage(scopeId, t(locale, 'watch_already_enabled', { threadId: watchedThreadId }));
+          return;
+        }
+        if (mode === 'active') {
+          await this.sendMessage(scopeId, t(locale, 'watch_started_active', { threadId: watchedThreadId }));
+          return;
+        }
+        await this.sendMessage(scopeId, t(locale, 'watch_started_idle', { threadId: watchedThreadId }));
+        return;
+      }
+      case 'unwatch': {
+        const watchedThreadId = await this.unwatchThread(scopeId);
+        if (!watchedThreadId) {
+          await this.sendMessage(scopeId, t(locale, 'watch_not_enabled'));
+          return;
+        }
+        await this.sendMessage(scopeId, t(locale, 'watch_stopped', { threadId: watchedThreadId }));
+        return;
+      }
+      case 'takeover': {
+        await this.handleTakeoverCommand(event, locale, args);
+        return;
+      }
+      case 'queue': {
+        await this.handleQueueCommand(event, locale, args);
+        return;
+      }
       case 'new': {
         const cwd = args.join(' ').trim() || this.config.defaultCwd;
+        this.queuedPrompts.delete(scopeId);
+        await this.stopWatchingScopeThread(scopeId);
         const binding = await this.createBinding(scopeId, cwd);
         const settings = this.store.getChatSettings(scopeId);
         await this.sendMessage(scopeId, [
@@ -372,6 +507,23 @@ export class BridgeController {
       }
       case 'permissions':
       case 'access': {
+        const accessArg = args.join(' ').trim();
+        if (accessArg) {
+          const preset = normalizeAccessPreset(accessArg);
+          if (!preset) {
+            await this.sendMessage(
+              scopeId,
+              t(locale, 'usage_access_preset', { value: accessArg }),
+            );
+            return;
+          }
+          this.store.setChatAccessPreset(scopeId, preset);
+          await this.sendMessage(
+            scopeId,
+            t(locale, 'access_preset_configured', { value: formatAccessPresetLabel(locale, preset) }),
+          );
+          return;
+        }
         await this.showAccessSettingsPanel(scopeId, undefined, locale);
         return;
       }
@@ -436,18 +588,18 @@ export class BridgeController {
     }
     const match = /^approval:([a-f0-9]+):(accept|session|deny)$/.exec(event.data);
     if (!match) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
       return;
     }
     const localId = match[1]!;
     const action = match[2]! as ApprovalAction;
     const approval = this.store.getPendingApproval(localId);
     if (!approval || approval.resolvedAt) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'approval_already_resolved'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'approval_already_resolved'));
       return;
     }
     if (approval.chatId !== scopeId || (approval.messageId !== null && approval.messageId !== event.messageId)) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'approval_mismatch'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'approval_mismatch'));
       return;
     }
 
@@ -456,7 +608,7 @@ export class BridgeController {
     this.store.markApprovalResolved(localId);
     this.clearApprovalTimer(localId);
     await this.clearPendingApprovalStatus(approval.threadId, approval.kind);
-    await this.bot.answerCallback(event.callbackQueryId, t(locale, 'decision_recorded'));
+    await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'decision_recorded'));
     if (approval.messageId !== null) {
       await this.editMessage(scopeId, approval.messageId, renderApprovalMessage(locale, approval, action));
     }
@@ -640,7 +792,38 @@ export class BridgeController {
     const staged: StagedTelegramAttachment[] = [];
     for (const attachment of attachments) {
       try {
-        const remoteFile = await this.bot.getFile(attachment.fileId);
+        if (attachment.localPath) {
+          const planned = planAttachmentStoragePath(
+            cwd,
+            threadId,
+            attachment,
+            path.basename(attachment.localPath),
+          );
+          await fs.mkdir(path.dirname(planned.localPath), { recursive: true });
+          await fs.copyFile(attachment.localPath, planned.localPath);
+          const stat = await fs.stat(planned.localPath);
+          const resolvedSize = stat.size;
+          if (resolvedSize > TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES) {
+            throw new UserFacingError(t(locale, 'attachment_too_large', {
+              name: attachment.fileName ?? attachment.fileUniqueId,
+              size: resolvedSize,
+            }));
+          }
+          const resolvedAttachment: TelegramInboundAttachment = {
+            ...attachment,
+            fileName: planned.fileName,
+            fileSize: resolvedSize,
+          };
+          staged.push({
+            ...resolvedAttachment,
+            fileName: planned.fileName,
+            localPath: planned.localPath,
+            relativePath: planned.relativePath,
+            nativeImage: isNativeImageAttachment(resolvedAttachment),
+          });
+          continue;
+        }
+        const remoteFile = await this.messaging.getFile(attachment.fileId);
         const resolvedSize = attachment.fileSize ?? remoteFile.file_size ?? null;
         if (resolvedSize !== null && resolvedSize > TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES) {
           throw new UserFacingError(t(locale, 'attachment_too_large', {
@@ -653,7 +836,7 @@ export class BridgeController {
         }
         const planned = planAttachmentStoragePath(cwd, threadId, attachment, remoteFile.file_path);
         await fs.mkdir(path.dirname(planned.localPath), { recursive: true });
-        await this.bot.downloadResolvedFile(remoteFile.file_path, planned.localPath);
+        await this.messaging.downloadResolvedFile(remoteFile.file_path, planned.localPath);
         const resolvedAttachment: TelegramInboundAttachment = {
           ...attachment,
           fileName: planned.fileName,
@@ -688,15 +871,52 @@ export class BridgeController {
     turnId: string,
     previewMessageId: number,
   ): Promise<void> {
-    let resolveTurn!: () => void;
-    const waitForTurn = new Promise<void>((resolve) => {
-      resolveTurn = resolve;
+    const active = this.createActiveTurnState(
+      scopeId,
+      chatId,
+      chatType,
+      topicId,
+      threadId,
+      turnId,
+      previewMessageId,
+    );
+    this.activeTurns.set(turnId, active);
+    if (previewMessageId > 0) {
+      this.store.saveActiveTurnPreview({
+        turnId,
+        scopeId,
+        threadId,
+        messageId: previewMessageId,
+      });
+    }
+    this.updateStatus();
+    try {
+      await this.queueTurnRender(active, { forceStatus: true, forceStream: true });
+    } catch (error) {
+      this.logger.warn('telegram.preview_keyboard_attach_failed', { error: String(error), turnId });
+    }
+  }
+
+  private createActiveTurnState(
+    scopeId: string,
+    chatId: string,
+    chatType: string,
+    topicId: number | null,
+    threadId: string,
+    turnId: string,
+    previewMessageId: number,
+    isObserved = false,
+  ): ActiveTurn {
+    let resolver: () => void = () => {};
+    const completion = new Promise<void>((resolve) => {
+      resolver = resolve;
     });
-    const active: ActiveTurn = {
+    return {
       scopeId,
       chatId,
       topicId,
       renderRoute: resolveTelegramRenderRoute(chatType, topicId),
+      isObserved,
       threadId,
       turnId,
       previewMessageId,
@@ -719,24 +939,10 @@ export class BridgeController {
       forceStatusFlush: false,
       forceStreamFlush: false,
       renderTask: null,
-      resolver: resolveTurn,
+      completion,
+      archivedMessageIds: [],
+      resolver,
     };
-    this.activeTurns.set(turnId, active);
-    if (previewMessageId > 0) {
-      this.store.saveActiveTurnPreview({
-        turnId,
-        scopeId,
-        threadId,
-        messageId: previewMessageId,
-      });
-    }
-    this.updateStatus();
-    try {
-      await this.queueTurnRender(active, { forceStatus: true, forceStream: true });
-    } catch (error) {
-      this.logger.warn('telegram.preview_keyboard_attach_failed', { error: String(error), turnId });
-    }
-    await waitForTurn;
   }
 
   private async completeTurn(active: ActiveTurn): Promise<void> {
@@ -770,6 +976,10 @@ export class BridgeController {
     }
 
     switch (activity.kind) {
+      case 'user_message': {
+        await this.sendObservedCliUserMessage(active.scopeId, activity.text);
+        return;
+      }
       case 'agent_message_started': {
         this.promoteReadyToolBatch(active);
         ensureTurnSegment(active, activity.itemId, activity.phase, activity.outputKind);
@@ -817,9 +1027,11 @@ export class BridgeController {
         return;
       }
       case 'turn_completed': {
+        const scopeId = active.scopeId;
         try {
           this.promoteReadyToolBatch(active);
           await this.completeTurn(active);
+          await this.cleanupObservedTransientMessages(active);
           if (this.config.codexAppSyncOnTurnComplete) {
             const revealError = await this.tryRevealThread(active.scopeId, active.threadId, 'turn-complete');
             if (revealError) {
@@ -832,9 +1044,11 @@ export class BridgeController {
             }
           }
         } finally {
+          this.clearObservedTurnWatcher(active.turnId);
           active.resolver();
           this.activeTurns.delete(active.turnId);
           this.updateStatus();
+          await this.withLock(scopeId, async () => this.startQueuedPromptIfPresent(scopeId));
         }
         return;
       }
@@ -894,8 +1108,7 @@ export class BridgeController {
     text: string,
     inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
   ): Promise<number> {
-    const target = parseTelegramScopeId(scopeId);
-    return this.bot.sendMessage(target.chatId, text, inlineKeyboard, target.topicId);
+    return this.messaging.sendPlain(scopeId, text, inlineKeyboard);
   }
 
   private async sendHtmlMessage(
@@ -903,8 +1116,7 @@ export class BridgeController {
     text: string,
     inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
   ): Promise<number> {
-    const target = parseTelegramScopeId(scopeId);
-    return this.bot.sendHtmlMessage(target.chatId, text, inlineKeyboard, target.topicId);
+    return this.messaging.sendHtml(scopeId, text, inlineKeyboard);
   }
 
   private async editMessage(
@@ -913,8 +1125,7 @@ export class BridgeController {
     text: string,
     inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
   ): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.editMessage(target.chatId, messageId, text, inlineKeyboard);
+    await this.messaging.editPlain(scopeId, messageId, text, inlineKeyboard);
   }
 
   private async editHtmlMessage(
@@ -923,18 +1134,68 @@ export class BridgeController {
     text: string,
     inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>,
   ): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.editHtmlMessage(target.chatId, messageId, text, inlineKeyboard);
+    await this.messaging.editHtml(scopeId, messageId, text, inlineKeyboard);
   }
 
   private async deleteMessage(scopeId: string, messageId: number): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.deleteMessage(target.chatId, messageId);
+    await this.messaging.deleteMessage(scopeId, messageId);
   }
 
   private async sendTyping(scopeId: string): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.sendTypingInThread(target.chatId, target.topicId);
+    await this.messaging.sendTypingInScope(scopeId);
+  }
+
+  private async sendObservedCliUserMessage(scopeId: string, text: string): Promise<void> {
+    const chunks = chunkTelegramMessage(text, TELEGRAM_MESSAGE_LIMIT - 64, '');
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index]!;
+      const body = index === 0
+        ? `<b>${escapeTelegramHtml(OBSERVED_CLI_USER_LABEL)}</b>\n<pre>${escapeTelegramHtml(chunk)}</pre>`
+        : `<pre>${escapeTelegramHtml(chunk)}</pre>`;
+      await this.sendHtmlMessage(scopeId, body);
+    }
+  }
+
+  private async cleanupObservedTransientMessages(active: ActiveTurn): Promise<void> {
+    if (!active.isObserved || !this.hasObservedPersistentReply(active)) {
+      return;
+    }
+
+    const messageIds = new Set<number>();
+    for (const segment of active.segments) {
+      if (segment.outputKind === 'final_answer') {
+        continue;
+      }
+      for (const message of segment.messages) {
+        messageIds.add(message.messageId);
+      }
+    }
+    for (const messageId of active.archivedMessageIds) {
+      messageIds.add(messageId);
+    }
+
+    for (const messageId of messageIds) {
+      try {
+        await this.deleteMessage(active.scopeId, messageId);
+      } catch (error) {
+        if (!isTelegramMessageGone(error)) {
+          this.logger.warn('telegram.observed_cleanup_delete_failed', {
+            error: String(error),
+            turnId: active.turnId,
+            messageId,
+          });
+        }
+      }
+    }
+  }
+
+  private hasObservedPersistentReply(active: ActiveTurn): boolean {
+    if ((active.finalText || '').trim()) {
+      return true;
+    }
+    return active.segments.some((segment) => (
+      segment.outputKind === 'final_answer' && ((segment.text || '').trim().length > 0 || segment.messages.length > 0)
+    ));
   }
 
   private async ensureThreadReady(scopeId: string, binding: ThreadBinding): Promise<ThreadBinding> {
@@ -1069,6 +1330,420 @@ export class BridgeController {
     return [...this.activeTurns.values()].find(turn => turn.scopeId === scopeId);
   }
 
+  private clearObservedThreadWatchers(): void {
+    for (const watcher of this.observedThreadWatchers.values()) {
+      watcher.stopped = true;
+      if (watcher.timer) {
+        clearTimeout(watcher.timer);
+        watcher.timer = null;
+      }
+    }
+    this.observedThreadWatchers.clear();
+  }
+
+  private clearObservedTurnWatcher(turnId: string): void {
+    for (const watcher of this.observedThreadWatchers.values()) {
+      if (watcher.activeTurnId === turnId) {
+        watcher.activeTurnId = null;
+        if (watcher.mode === 'app_snapshot') {
+          watcher.cursor = null;
+        }
+        watcher.waitingOnApproval = false;
+        watcher.sessionCursor = { activeTurnId: null, nextMessageIndex: 0 };
+      }
+    }
+  }
+
+  private async stopWatchingScopeThread(scopeId: string, nextThreadId?: string): Promise<void> {
+    const watcher = this.observedThreadWatchers.get(scopeId);
+    if (!watcher) {
+      return;
+    }
+    if (nextThreadId && watcher.threadId === nextThreadId) {
+      return;
+    }
+    watcher.stopped = true;
+    if (watcher.timer) {
+      clearTimeout(watcher.timer);
+      watcher.timer = null;
+    }
+    this.observedThreadWatchers.delete(scopeId);
+
+    if (!watcher.activeTurnId) {
+      return;
+    }
+    const active = this.activeTurns.get(watcher.activeTurnId);
+    if (!active) {
+      return;
+    }
+    this.clearToolBatchTimer(active.toolBatch);
+    this.clearRenderRetry(active);
+    if (active.previewActive) {
+      await this.retirePreviewMessage(
+        active.scopeId,
+        active.previewMessageId,
+        t(this.localeForChat(active.scopeId), 'stale_preview_expired'),
+        active.turnId,
+      );
+    }
+    active.resolver();
+    this.activeTurns.delete(active.turnId);
+    this.updateStatus();
+  }
+
+  private async unwatchThread(scopeId: string): Promise<string | null> {
+    const watcher = this.observedThreadWatchers.get(scopeId);
+    if (!watcher) {
+      return null;
+    }
+    const threadId = watcher.threadId;
+    await this.stopWatchingScopeThread(scopeId);
+    return threadId;
+  }
+
+  private async watchThread(
+    scopeId: string,
+    chatId: string,
+    chatType: string,
+    topicId: number | null,
+    binding: ThreadBinding,
+  ): Promise<{ mode: 'already' | 'active' | 'idle'; threadId: string }> {
+    let thread = await this.app.readThread(binding.threadId, false);
+    let threadId = binding.threadId;
+    let watchMode: ObservedThreadWatcher['mode'] = 'session_file';
+    let sessionPath: string | null = null;
+
+    if (thread?.source === 'cli' && thread.path) {
+      sessionPath = thread.path;
+    } else {
+      const readyBinding = await this.ensureThreadReady(scopeId, binding);
+      threadId = readyBinding.threadId;
+      thread = await this.app.readThread(threadId, false);
+      watchMode = 'app_snapshot';
+    }
+
+    const existing = this.observedThreadWatchers.get(scopeId);
+    if (existing && existing.threadId === threadId && existing.mode === watchMode && !existing.stopped) {
+      return { mode: 'already', threadId };
+    }
+    await this.stopWatchingScopeThread(scopeId, threadId);
+    const watcher: ObservedThreadWatcher = {
+      scopeId,
+      chatId,
+      chatType,
+      topicId,
+      threadId,
+      mode: watchMode,
+      timer: null,
+      cursor: null,
+      activeTurnId: null,
+      waitingOnApproval: false,
+      sessionPath,
+      sessionOffset: -1,
+      sessionRemainder: '',
+      sessionCursor: { activeTurnId: null, nextMessageIndex: 0 },
+      stopped: false,
+    };
+    this.observedThreadWatchers.set(scopeId, watcher);
+    const mode = await this.pollObservedThread(watcher);
+    this.scheduleObservedThreadPoll(watcher);
+    return { mode, threadId };
+  }
+
+  private scheduleObservedThreadPoll(watcher: ObservedThreadWatcher): void {
+    if (watcher.stopped) {
+      return;
+    }
+    watcher.timer = setTimeout(() => {
+      watcher.timer = null;
+      void this.pollObservedThread(watcher).catch((error) => {
+        this.logger.error('codex.observe_thread_failed', {
+          scopeId: watcher.scopeId,
+          threadId: watcher.threadId,
+          error: toErrorMeta(error),
+        });
+      }).finally(() => {
+        if (!watcher.stopped && this.observedThreadWatchers.get(watcher.scopeId) === watcher) {
+          this.scheduleObservedThreadPoll(watcher);
+        }
+      });
+    }, OBSERVED_THREAD_POLL_MS);
+  }
+
+  private async pollObservedThread(watcher: ObservedThreadWatcher): Promise<'active' | 'idle'> {
+    if (watcher.stopped) {
+      return 'idle';
+    }
+    if (watcher.mode === 'session_file') {
+      return this.pollObservedSessionFile(watcher);
+    }
+    const snapshot = await this.app.readThreadSnapshot(watcher.threadId);
+    if (!snapshot) {
+      await this.stopWatchingScopeThread(watcher.scopeId);
+      return 'idle';
+    }
+
+    const liveTurn = findLiveTurn(snapshot);
+    const latestTurn = findLatestTurn(snapshot);
+    if (!liveTurn) {
+      if (watcher.activeTurnId && latestTurn && latestTurn.turnId === watcher.activeTurnId) {
+        const active = this.activeTurns.get(watcher.activeTurnId);
+        if (active) {
+          await this.applyObservedTurnSnapshot(watcher, active, latestTurn, false);
+          await this.handleTurnActivityEvent({
+            kind: 'turn_completed',
+            turnId: active.turnId,
+            state: 'completed',
+          });
+        }
+      }
+      if (watcher.activeTurnId) {
+        const staleActive = this.activeTurns.get(watcher.activeTurnId);
+        if (staleActive) {
+          staleActive.resolver();
+          this.activeTurns.delete(staleActive.turnId);
+          this.updateStatus();
+        }
+      }
+      watcher.activeTurnId = null;
+      watcher.cursor = null;
+      watcher.waitingOnApproval = false;
+      return 'idle';
+    }
+
+    let active = watcher.activeTurnId ? this.activeTurns.get(watcher.activeTurnId) ?? null : null;
+    if (!active || watcher.activeTurnId !== liveTurn.turnId) {
+      if (watcher.activeTurnId && watcher.activeTurnId !== liveTurn.turnId) {
+        const staleActive = this.activeTurns.get(watcher.activeTurnId);
+        if (staleActive) {
+          staleActive.resolver();
+          this.activeTurns.delete(staleActive.turnId);
+        }
+      }
+      active = this.createActiveTurnState(
+        watcher.scopeId,
+        watcher.chatId,
+        watcher.chatType,
+        watcher.topicId,
+        watcher.threadId,
+        liveTurn.turnId,
+        0,
+        true,
+      );
+      this.activeTurns.set(liveTurn.turnId, active);
+      watcher.activeTurnId = liveTurn.turnId;
+      watcher.cursor = null;
+      watcher.waitingOnApproval = false;
+      this.updateStatus();
+      await this.queueTurnRender(active, { forceStatus: true, forceStream: true });
+    }
+
+    await this.applyObservedTurnSnapshot(
+      watcher,
+      active,
+      liveTurn,
+      snapshot.activeFlags.includes('waitingOnApproval'),
+    );
+    return 'active';
+  }
+
+  private async pollObservedSessionFile(watcher: ObservedThreadWatcher): Promise<'active' | 'idle'> {
+    if (!watcher.sessionPath) {
+      return 'idle';
+    }
+
+    if (watcher.sessionOffset < 0) {
+      let text: string;
+      try {
+        text = await fs.readFile(watcher.sessionPath, 'utf8');
+      } catch (error) {
+        if (isFileMissingError(error)) {
+          await this.stopWatchingScopeThread(watcher.scopeId);
+          return 'idle';
+        }
+        throw error;
+      }
+      const split = splitJsonlChunk('', text);
+      const bootstrap = bootstrapSessionLog(split.lines);
+      watcher.sessionOffset = Buffer.byteLength(text);
+      watcher.sessionRemainder = split.remainder;
+      watcher.sessionCursor = bootstrap.cursor;
+      if (bootstrap.startedTurnId) {
+        await this.ensureObservedActiveTurnState(watcher, bootstrap.startedTurnId);
+      } else {
+        watcher.activeTurnId = null;
+      }
+      await this.applyObservedSessionEvents(watcher, bootstrap.events);
+      return watcher.sessionCursor.activeTurnId ? 'active' : 'idle';
+    }
+
+    const stats = await fs.stat(watcher.sessionPath).catch((error) => {
+      if (isFileMissingError(error)) {
+        return null;
+      }
+      throw error;
+    });
+    if (!stats) {
+      await this.stopWatchingScopeThread(watcher.scopeId);
+      return 'idle';
+    }
+
+    if (stats.size < watcher.sessionOffset) {
+      watcher.sessionOffset = -1;
+      watcher.sessionRemainder = '';
+      watcher.sessionCursor = { activeTurnId: null, nextMessageIndex: 0 };
+      return this.pollObservedSessionFile(watcher);
+    }
+
+    if (stats.size === watcher.sessionOffset) {
+      return watcher.sessionCursor.activeTurnId ? 'active' : 'idle';
+    }
+
+    const handle = await fs.open(watcher.sessionPath, 'r');
+    let chunk = '';
+    try {
+      const length = stats.size - watcher.sessionOffset;
+      const buffer = Buffer.alloc(length);
+      const { bytesRead } = await handle.read(buffer, 0, length, watcher.sessionOffset);
+      chunk = buffer.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await handle.close();
+    }
+
+    watcher.sessionOffset = stats.size;
+    const split = splitJsonlChunk(watcher.sessionRemainder, chunk);
+    watcher.sessionRemainder = split.remainder;
+    const diff = applySessionLog(split.lines, watcher.sessionCursor);
+    watcher.sessionCursor = diff.cursor;
+
+    for (const turnId of diff.startedTurnIds) {
+      await this.ensureObservedActiveTurnState(watcher, turnId);
+    }
+    await this.applyObservedSessionEvents(watcher, diff.events);
+    return watcher.sessionCursor.activeTurnId ? 'active' : 'idle';
+  }
+
+  private async ensureObservedActiveTurnState(watcher: ObservedThreadWatcher, turnId: string): Promise<ActiveTurn> {
+    const existing = this.activeTurns.get(turnId);
+    if (existing) {
+      watcher.activeTurnId = turnId;
+      return existing;
+    }
+
+    if (watcher.activeTurnId && watcher.activeTurnId !== turnId) {
+      const staleActive = this.activeTurns.get(watcher.activeTurnId);
+      if (staleActive) {
+        staleActive.resolver();
+        this.activeTurns.delete(staleActive.turnId);
+      }
+    }
+
+    const active = this.createActiveTurnState(
+      watcher.scopeId,
+      watcher.chatId,
+      watcher.chatType,
+      watcher.topicId,
+      watcher.threadId,
+      turnId,
+      0,
+      true,
+    );
+    this.activeTurns.set(turnId, active);
+    watcher.activeTurnId = turnId;
+    this.updateStatus();
+    await this.queueTurnRender(active, { forceStatus: true, forceStream: true });
+    return active;
+  }
+
+  private async applyObservedSessionEvents(
+    watcher: ObservedThreadWatcher,
+    events: TurnActivityEvent[],
+  ): Promise<void> {
+    for (const event of events) {
+      if (!this.activeTurns.has(event.turnId)) {
+        await this.ensureObservedActiveTurnState(watcher, event.turnId);
+      }
+      await this.handleTurnActivityEvent(event);
+    }
+  }
+
+  private async applyObservedTurnSnapshot(
+    watcher: ObservedThreadWatcher,
+    active: ActiveTurn,
+    turn: { turnId: string; status: string; items: any[]; error: string | null },
+    waitingOnApproval: boolean,
+  ): Promise<void> {
+    const diff = diffObservedTurn(watcher.cursor, turn, waitingOnApproval);
+    watcher.cursor = diff.nextCursor;
+    if (watcher.waitingOnApproval !== diff.waitingOnApproval) {
+      watcher.waitingOnApproval = diff.waitingOnApproval;
+      if (diff.waitingOnApproval) {
+        active.pendingApprovalKinds.add('command');
+      } else {
+        active.pendingApprovalKinds.delete('command');
+      }
+      await this.queueTurnRender(active, { forceStatus: true });
+    }
+    for (const event of diff.events) {
+      await this.handleTurnActivityEvent(event);
+    }
+  }
+
+  private async handleTakeoverCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
+    const scopeId = event.scopeId;
+    const nextPrompt = args.join(' ').trim();
+    if (!nextPrompt) {
+      await this.sendMessage(scopeId, t(locale, 'usage_takeover'));
+      return;
+    }
+
+    this.queuedPrompts.delete(scopeId);
+    const active = this.findActiveTurn(scopeId);
+    if (active) {
+      if (!active.interruptRequested) {
+        await this.requestInterrupt(active);
+      }
+      await this.sendMessage(scopeId, t(locale, 'interrupt_requested_waiting'));
+      await active.completion;
+    }
+
+    await this.startBoundTurnFromEvent(event, locale, nextPrompt);
+  }
+
+  private async handleQueueCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
+    const scopeId = event.scopeId;
+    const nextPrompt = args.join(' ').trim();
+    if (!nextPrompt) {
+      await this.sendMessage(scopeId, t(locale, 'usage_queue'));
+      return;
+    }
+
+    if (!this.findActiveTurn(scopeId)) {
+      await this.startBoundTurnFromEvent(event, locale, nextPrompt);
+      return;
+    }
+
+    const replaced = this.queuedPrompts.has(scopeId);
+    this.queuedPrompts.set(scopeId, { event, text: nextPrompt });
+    await this.sendMessage(scopeId, t(locale, replaced ? 'queued_prompt_replaced' : 'queued_prompt_set'));
+  }
+
+  private async startQueuedPromptIfPresent(scopeId: string): Promise<void> {
+    if (this.findActiveTurn(scopeId)) {
+      return;
+    }
+    const queued = this.queuedPrompts.get(scopeId);
+    if (!queued) {
+      return;
+    }
+    this.queuedPrompts.delete(scopeId);
+    await this.startBoundTurnFromEvent(
+      queued.event,
+      this.localeForChat(scopeId, queued.event.languageCode),
+      queued.text,
+    );
+  }
+
   private async handleModelCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
     const scopeId = event.scopeId;
     if (args.length === 0) {
@@ -1171,12 +1846,13 @@ export class BridgeController {
 
   private async handleThreadOpenCallback(event: TelegramCallbackEvent, threadId: string, locale: AppLocale): Promise<void> {
     const scopeId = event.scopeId;
+    await this.stopWatchingScopeThread(scopeId, threadId);
     let binding: ThreadBinding;
     try {
       binding = await this.bindCachedThread(scopeId, threadId);
     } catch (error) {
       if (isThreadNotFoundError(error)) {
-        await this.bot.answerCallback(event.callbackQueryId, t(locale, 'thread_no_longer_available'));
+        await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'thread_no_longer_available'));
         return;
       }
       throw error;
@@ -1197,7 +1873,7 @@ export class BridgeController {
       const revealError = await this.tryRevealThread(scopeId, binding.threadId, 'open');
       callbackText = revealError ? t(locale, 'opened_sync_failed_short') : t(locale, 'opened_in_codex_short');
     }
-    await this.bot.answerCallback(event.callbackQueryId, callbackText);
+    await this.messaging.answerCallback(event.callbackQueryId, callbackText);
   }
 
   private async handleTurnInterruptCallback(event: TelegramCallbackEvent, turnId: string, locale: AppLocale): Promise<void> {
@@ -1205,19 +1881,19 @@ export class BridgeController {
     const active = this.activeTurns.get(turnId);
     if (!active || active.scopeId !== scopeId) {
       await this.cleanupStaleInterruptButton(scopeId, event.messageId, locale);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'turn_already_finished'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'turn_already_finished'));
       return;
     }
     if (active.interruptRequested) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'interrupt_already_requested'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'interrupt_already_requested'));
       return;
     }
     active.interruptRequested = true;
     try {
       await this.requestInterrupt(active);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'interrupt_requested'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'interrupt_requested'));
     } catch (error) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'interrupt_failed', { error: formatUserError(error) }));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'interrupt_failed', { error: formatUserError(error) }));
     }
   }
 
@@ -1229,28 +1905,28 @@ export class BridgeController {
     const scopeId = event.scopeId;
     if (target === 'models') {
       await this.showModelSettingsPanel(scopeId, event.messageId, locale);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'opened_model_settings'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'opened_model_settings'));
       return;
     }
     if (target === 'permissions') {
       await this.showAccessSettingsPanel(scopeId, event.messageId, locale);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'opened_access_settings'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'opened_access_settings'));
       return;
     }
     if (target === 'threads') {
       await this.showThreadsPanel(scopeId, event.messageId, undefined, locale);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'opened_thread_list'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'opened_thread_list'));
       return;
     }
 
     const binding = this.store.getBinding(scopeId);
     if (!binding) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'no_thread_bound_callback'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'no_thread_bound_callback'));
       return;
     }
     const readyBinding = await this.ensureThreadReady(scopeId, binding);
     const revealError = await this.tryRevealThread(scopeId, readyBinding.threadId, 'reveal');
-    await this.bot.answerCallback(event.callbackQueryId, revealError ? t(locale, 'reveal_failed', { error: revealError }) : t(locale, 'opened_in_codex_short'));
+    await this.messaging.answerCallback(event.callbackQueryId, revealError ? t(locale, 'reveal_failed', { error: revealError }) : t(locale, 'opened_in_codex_short'));
   }
 
   private async showWherePanel(scopeId: string, messageId?: number, locale = this.localeForChat(scopeId)): Promise<void> {
@@ -1258,7 +1934,7 @@ export class BridgeController {
     const settings = this.store.getChatSettings(scopeId);
     const access = this.resolveEffectiveAccess(scopeId, settings);
     if (!binding) {
-      const text = [
+      let text = [
         t(locale, 'where_no_thread_bound'),
         t(locale, 'where_configured_model', { value: settings?.model ?? t(locale, 'server_default') }),
         t(locale, 'where_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }),
@@ -1267,6 +1943,9 @@ export class BridgeController {
         t(locale, 'where_sandbox_mode', { value: formatSandboxModeLabel(locale, access.sandboxMode) }),
         t(locale, 'where_send_message_or_new'),
       ].join('\n');
+      if (parseWeixinBridgeScope(scopeId)) {
+        text += `\n\n${formatWeixinWhereNavCopyPaste(locale, false)}`;
+      }
       if (messageId !== undefined) {
         await this.editMessage(scopeId, messageId, text, whereKeyboard(locale, false));
         return;
@@ -1278,7 +1957,10 @@ export class BridgeController {
     const readyBinding = await this.ensureThreadReady(scopeId, binding);
     const thread = await this.app.readThread(readyBinding.threadId, false);
     if (!thread) {
-      const text = t(locale, 'where_thread_unavailable', { threadId: readyBinding.threadId });
+      let text = t(locale, 'where_thread_unavailable', { threadId: readyBinding.threadId });
+      if (parseWeixinBridgeScope(scopeId)) {
+        text += `\n\n${formatWeixinWhereNavCopyPaste(locale, true)}`;
+      }
       if (messageId !== undefined) {
         await this.editMessage(scopeId, messageId, text, whereKeyboard(locale, false));
         return;
@@ -1287,7 +1969,10 @@ export class BridgeController {
       return;
     }
 
-    const text = formatWhereMessage(locale, thread, settings, this.config.defaultCwd, access);
+    let text = formatWhereMessage(locale, thread, settings, this.config.defaultCwd, access);
+    if (parseWeixinBridgeScope(scopeId)) {
+      text += `\n\n${formatWeixinWhereNavCopyPaste(locale, true)}`;
+    }
     if (messageId !== undefined) {
       await this.editMessage(scopeId, messageId, text, whereKeyboard(locale, true));
       return;
@@ -1311,7 +1996,15 @@ export class BridgeController {
       updatedAt: thread.updatedAt,
     }));
     this.store.cacheThreadList(scopeId, cached);
-    const text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null);
+    let text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null);
+    if (parseWeixinBridgeScope(scopeId)) {
+      const rows = cached.map((row) => ({
+        threadId: row.threadId,
+        name: row.name,
+        preview: row.preview,
+      }));
+      text += `\n\n${formatWeixinThreadsCopyPaste(locale, rows, searchTerm ?? null)}`;
+    }
     const keyboard = buildThreadsKeyboard(locale, cached);
     if (messageId !== undefined) {
       await this.editHtmlMessage(scopeId, messageId, text, keyboard);
@@ -1323,7 +2016,10 @@ export class BridgeController {
   private async showModelSettingsPanel(scopeId: string, messageId?: number, locale = this.localeForChat(scopeId)): Promise<void> {
     const models = await this.app.listModels();
     const settings = this.store.getChatSettings(scopeId);
-    const text = formatModelSettingsMessage(locale, models, settings);
+    let text = formatModelSettingsMessage(locale, models, settings);
+    if (parseWeixinBridgeScope(scopeId)) {
+      text += `\n\n${formatWeixinModelCopyPaste(locale, models, settings)}`;
+    }
     const keyboard = buildModelSettingsKeyboard(locale, models, settings);
     if (messageId !== undefined) {
       await this.editHtmlMessage(scopeId, messageId, text, keyboard);
@@ -1334,7 +2030,10 @@ export class BridgeController {
 
   private async showAccessSettingsPanel(scopeId: string, messageId?: number, locale = this.localeForChat(scopeId)): Promise<void> {
     const access = this.resolveEffectiveAccess(scopeId);
-    const text = formatAccessSettingsMessage(locale, access);
+    let text = formatAccessSettingsMessage(locale, access);
+    if (parseWeixinBridgeScope(scopeId)) {
+      text += `\n\n${formatWeixinAccessCopyPaste(locale)}`;
+    }
     const keyboard = buildAccessSettingsKeyboard(locale, access);
     if (messageId !== undefined) {
       await this.editHtmlMessage(scopeId, messageId, text, keyboard);
@@ -1351,7 +2050,7 @@ export class BridgeController {
   ): Promise<void> {
     const scopeId = event.scopeId;
     if (kind !== 'access' && this.findActiveTurn(scopeId)) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'wait_current_turn'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'wait_current_turn'));
       return;
     }
 
@@ -1370,53 +2069,53 @@ export class BridgeController {
         const nextEffort = clampEffortToModel(defaultModel, settings?.reasoningEffort ?? null);
         this.store.setChatSettings(scopeId, null, nextEffort.effort);
         await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
-        await this.bot.answerCallback(event.callbackQueryId, t(locale, 'using_server_default_model'));
+        await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'using_server_default_model'));
         return;
       }
       const selected = resolveRequestedModel(models, value);
       if (!selected) {
-        await this.bot.answerCallback(event.callbackQueryId, t(locale, 'model_no_longer_available'));
+        await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'model_no_longer_available'));
         return;
       }
       const nextEffort = clampEffortToModel(selected, settings?.reasoningEffort ?? null);
       this.store.setChatSettings(scopeId, selected.model, nextEffort.effort);
       await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'callback_model', { model: selected.model }));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'callback_model', { model: selected.model }));
       return;
     }
 
     if (value === 'default') {
       this.store.setChatSettings(scopeId, settings?.model ?? null, null);
       await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'using_default_effort'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'using_default_effort'));
       return;
     }
 
     const effort = normalizeRequestedEffort(value);
     if (!effort) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'unknown_effort'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'unknown_effort'));
       return;
     }
     const currentModel = resolveCurrentModel(models, settings?.model ?? null);
     if (currentModel && currentModel.supportedReasoningEfforts.length > 0 && !currentModel.supportedReasoningEfforts.includes(effort)) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'effort_not_supported_by_model'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'effort_not_supported_by_model'));
       return;
     }
     this.store.setChatSettings(scopeId, settings?.model ?? null, effort);
     await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
-    await this.bot.answerCallback(event.callbackQueryId, t(locale, 'callback_effort', { effort }));
+    await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'callback_effort', { effort }));
   }
 
   private async handleAccessSettingsCallback(event: TelegramCallbackEvent, rawValue: string, locale: AppLocale): Promise<void> {
     const scopeId = event.scopeId;
     const nextPreset = normalizeAccessPreset(rawValue);
     if (!nextPreset) {
-      await this.bot.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
+      await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
       return;
     }
     this.store.setChatAccessPreset(scopeId, nextPreset);
     await this.refreshAccessSettingsPanel(scopeId, event.messageId, locale);
-    await this.bot.answerCallback(event.callbackQueryId, t(locale, 'callback_access', {
+    await this.messaging.answerCallback(event.callbackQueryId, t(locale, 'callback_access', {
       value: formatAccessPresetLabel(locale, nextPreset),
     }));
   }
@@ -1440,6 +2139,31 @@ export class BridgeController {
       formatAccessSettingsMessage(locale, access),
       buildAccessSettingsKeyboard(locale, access),
     );
+  }
+
+  private async startBoundTurnFromEvent(
+    event: TelegramTextEvent,
+    locale: AppLocale,
+    text: string,
+  ): Promise<void> {
+    const scopeId = event.scopeId;
+    await this.stopWatchingScopeThread(scopeId);
+    const existingBinding = this.store.getBinding(scopeId);
+    const binding = existingBinding
+      ? await this.ensureThreadReady(scopeId, existingBinding)
+      : await this.createBinding(scopeId, null);
+    await this.sendTyping(scopeId);
+    const previewMessageId = 0;
+    try {
+      const input = await this.buildTurnInput(binding, { ...event, text }, locale);
+      const turnState = await this.startTurnWithRecovery(scopeId, binding, input);
+      await this.registerActiveTurn(scopeId, event.chatId, event.chatType, event.topicId, turnState.threadId, turnState.turnId, previewMessageId);
+    } catch (error) {
+      if (previewMessageId > 0) {
+        await this.cleanupTransientPreview(scopeId, previewMessageId);
+      }
+      throw error;
+    }
   }
 
   private async requestInterrupt(active: ActiveTurn): Promise<void> {
@@ -1646,13 +2370,11 @@ export class BridgeController {
   }
 
   private async clearMessageButtons(scopeId: string, messageId: number): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.clearMessageInlineKeyboard(target.chatId, messageId);
+    await this.messaging.clearInlineKeyboard(scopeId, messageId);
   }
 
   private async sendDraft(scopeId: string, draftId: number, text: string): Promise<void> {
-    const target = parseTelegramScopeId(scopeId);
-    await this.bot.sendMessageDraft(target.chatId, draftId, text, target.topicId);
+    await this.messaging.sendDraft(scopeId, draftId, text);
   }
 
   private renderActiveStatus(active: ActiveTurn): string {
@@ -1744,10 +2466,14 @@ export class BridgeController {
   private async archiveStatusMessage(active: ActiveTurn, content: ArchivedStatusContent): Promise<boolean> {
     if (!active.previewActive) {
       try {
+        let messageId: number | null = null;
         if (content.html) {
-          await this.sendHtmlMessage(active.scopeId, content.html);
+          messageId = await this.sendHtmlMessage(active.scopeId, content.html);
         } else {
-          await this.sendMessage(active.scopeId, content.text);
+          messageId = await this.sendMessage(active.scopeId, content.text);
+        }
+        if (active.isObserved && messageId !== null) {
+          active.archivedMessageIds.push(messageId);
         }
       } catch (error) {
         this.logger.warn('telegram.preview_archive_send_failed', { error: String(error), turnId: active.turnId });
@@ -1761,6 +2487,9 @@ export class BridgeController {
         await this.editHtmlMessage(active.scopeId, active.previewMessageId, content.html, []);
       } else {
         await this.editMessage(active.scopeId, active.previewMessageId, content.text, []);
+      }
+      if (active.isObserved) {
+        active.archivedMessageIds.push(active.previewMessageId);
       }
     } catch (error) {
       if (isTelegramMessageGone(error)) {
@@ -2333,3 +3062,9 @@ function isTelegramMessageGone(error: unknown): boolean {
     || message.includes('message to edit not found')
     || message.includes('message not found');
 }
+
+function isFileMissingError(error: unknown): boolean {
+  return error instanceof Error && /enoent|no such file or directory/i.test(error.message);
+}
+
+export { BridgeSessionCore as BridgeController };

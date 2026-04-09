@@ -33,6 +33,15 @@ export interface AppConfig {
   statusPath: string;
   logPath: string;
   lockPath: string;
+  /** When true, start Weixin (iLink) long-poll alongside Telegram. */
+  wxEnabled: boolean;
+  /** Allowed `from_user_id` values for inbound Weixin messages (empty = allow any). */
+  wxAllowedIlinkUserIds: string[];
+  weixinAccountsDir: string;
+  weixinSyncBufDir: string;
+  weixinMediaDir: string;
+  /** Optional `SKRouteTag` header for some IDC deployments. */
+  wxIlinkRouteTag: string | null;
 }
 
 export function loadConfig(): AppConfig {
@@ -58,6 +67,12 @@ export function loadConfig(): AppConfig {
     statusPath: DEFAULT_STATUS_PATH,
     logPath: DEFAULT_LOG_PATH,
     lockPath: process.env.LOCK_PATH || DEFAULT_LOCK_PATH,
+    wxEnabled: boolEnv('WX_ENABLED', false),
+    wxAllowedIlinkUserIds: parseCommaSeparatedIds(process.env.WX_ALLOWED_ILINK_USER_IDS),
+    weixinAccountsDir: process.env.WEIXIN_ACCOUNTS_DIR || path.join(APP_HOME, 'weixin', 'accounts'),
+    weixinSyncBufDir: process.env.WEIXIN_SYNC_BUF_DIR || path.join(APP_HOME, 'weixin', 'sync-buf'),
+    weixinMediaDir: process.env.WEIXIN_MEDIA_DIR || path.join(APP_HOME, 'weixin', 'media'),
+    wxIlinkRouteTag: optional('WX_ILINK_ROUTE_TAG'),
   };
   ensureAppDirs(config);
   return config;
@@ -70,9 +85,20 @@ export function ensureAppDirs(config: AppConfig): void {
     path.dirname(config.logPath),
     path.dirname(config.lockPath),
   ];
+  if (config.wxEnabled) {
+    dirs.push(config.weixinAccountsDir, config.weixinSyncBufDir, config.weixinMediaDir);
+  }
   for (const dir of dirs) {
     fs.mkdirSync(dir, { recursive: true });
   }
+}
+
+function parseCommaSeparatedIds(raw: string | undefined): string[] {
+  if (!raw?.trim()) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function required(key: string): string {

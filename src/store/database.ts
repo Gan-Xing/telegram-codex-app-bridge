@@ -10,6 +10,7 @@ import type {
   ReasoningEffortValue,
   ThreadBinding,
 } from '../types.js';
+import { migrateLegacyBridgeScopeIds } from './migrate_bridge_scope.js';
 
 export interface ActiveTurnPreviewRecord {
   turnId: string;
@@ -89,12 +90,18 @@ export class BridgeStore {
         summary TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS weixin_context_tokens (
+        scope_id TEXT PRIMARY KEY,
+        context_token TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
     `);
     this.ensureColumn('thread_cache', 'name', 'TEXT');
     this.ensureColumn('thread_cache', 'model_provider', 'TEXT');
     this.ensureColumn('thread_cache', 'status', "TEXT NOT NULL DEFAULT 'idle'");
     this.ensureColumn('chat_settings', 'locale', 'TEXT');
     this.ensureColumn('chat_settings', 'access_preset', 'TEXT');
+    migrateLegacyBridgeScopeIds(this.db);
   }
 
   getTelegramOffset(botKey: string): number {
@@ -353,6 +360,21 @@ export class BridgeStore {
         access_preset = excluded.access_preset,
         updated_at = excluded.updated_at
     `).run(chatId, model, reasoningEffort, locale, accessPreset, Date.now());
+  }
+
+  getWeixinContextToken(scopeId: string): string | null {
+    const row = this.db.prepare('SELECT context_token FROM weixin_context_tokens WHERE scope_id = ?').get(scopeId) as
+      | { context_token: string }
+      | undefined;
+    return row ? String(row.context_token) : null;
+  }
+
+  setWeixinContextToken(scopeId: string, contextToken: string): void {
+    this.db.prepare(`
+      INSERT INTO weixin_context_tokens (scope_id, context_token, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(scope_id) DO UPDATE SET context_token = excluded.context_token, updated_at = excluded.updated_at
+    `).run(scopeId, contextToken, Date.now());
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {

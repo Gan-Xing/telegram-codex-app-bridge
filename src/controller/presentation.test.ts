@@ -11,6 +11,10 @@ import {
   formatModelSettingsMessage,
   formatSandboxModeLabel,
   formatThreadsMessage,
+  formatWeixinAccessCopyPaste,
+  formatWeixinModelCopyPaste,
+  formatWeixinThreadsCopyPaste,
+  formatWeixinWhereNavCopyPaste,
   normalizeRequestedEffort,
   resolveRequestedModel,
 } from './presentation.js';
@@ -24,6 +28,8 @@ test('formatThreadsMessage highlights current thread and metadata', () => {
       preview: 'Split long replies and clean previews',
       cwd: '/tmp/project',
       modelProvider: 'openai',
+      source: 'cli',
+      path: '/tmp/project/thread-1.jsonl',
       status: 'idle',
       updatedAt: Math.floor(Date.now() / 1000) - 120,
     },
@@ -44,6 +50,8 @@ test('formatThreadsMessage escapes html and shows filter', () => {
       preview: 'Review <auth> flow',
       cwd: '/tmp/repo',
       modelProvider: 'openai',
+      source: 'cli',
+      path: '/tmp/repo/thread-2.jsonl',
       status: 'active',
       updatedAt: Math.floor(Date.now() / 1000) - 30,
     },
@@ -62,6 +70,8 @@ test('buildThreadsKeyboard creates one open button per thread', () => {
       preview: 'Review auth flow',
       cwd: '/tmp/repo',
       modelProvider: 'openai',
+      source: 'cli',
+      path: '/tmp/repo/thread-2.jsonl',
       status: 'active',
       updatedAt: Math.floor(Date.now() / 1000) - 30,
     },
@@ -220,6 +230,8 @@ test('presentation renders chinese locale strings', () => {
       preview: '修复桥接',
       cwd: '/tmp/project',
       modelProvider: 'openai',
+      source: 'cli',
+      path: '/tmp/project/thread-zh.jsonl',
       status: 'active',
       updatedAt: Math.floor(Date.now() / 1000) - 30,
     },
@@ -252,4 +264,71 @@ test('presentation renders chinese locale strings', () => {
   assert.match(renderedModels, /<b>模型设置<\/b>/);
   assert.match(renderedModels, /模型：<b>服务端默认<\/b>/);
   assert.match(renderedModels, /推理强度：<b>服务端默认<\/b>/);
+});
+
+test('formatWeixinThreadsCopyPaste lists /open lines and filter hint', () => {
+  const empty = formatWeixinThreadsCopyPaste('en', []);
+  assert.match(empty, /^---\n/);
+  assert.match(empty, /Copy-paste \(WeChat\):/);
+  assert.match(empty, /\(Empty list/);
+  assert.match(empty, /Filter: \/threads <keyword>/);
+
+  const withFilter = formatWeixinThreadsCopyPaste(
+    'en',
+    [
+      { threadId: 'a', name: 'One', preview: 'p1' },
+      { threadId: 'b', name: 'Two', preview: 'p2' },
+    ],
+    'bug',
+  );
+  assert.match(withFilter, /Current filter: bug/);
+  assert.match(withFilter, /\/open 1\n\/open 2/);
+});
+
+test('formatWeixinModelCopyPaste mirrors model list and efforts', () => {
+  const models: ModelInfo[] = [
+    {
+      id: 'm1',
+      model: 'o3',
+      displayName: 'O3',
+      description: '',
+      isDefault: true,
+      supportedReasoningEfforts: ['medium', 'high'],
+      defaultReasoningEffort: 'medium',
+    },
+    {
+      id: 'm2',
+      model: 'gpt-4',
+      displayName: 'G4',
+      description: '',
+      isDefault: false,
+      supportedReasoningEfforts: ['low'],
+      defaultReasoningEffort: 'low',
+    },
+  ];
+  const out = formatWeixinModelCopyPaste('en', models, {
+    chatId: 'c',
+    model: 'o3',
+    reasoningEffort: 'high',
+    locale: 'en',
+    accessPreset: null,
+    updatedAt: 0,
+  });
+  assert.match(out, /\/model default/);
+  assert.match(out, /\/model o3/);
+  assert.match(out, /\/model gpt-4/);
+  assert.match(out, /\/effort default/);
+  assert.match(out, /\/effort medium\n\/effort high/);
+});
+
+test('formatWeixinAccessCopyPaste lists preset commands', () => {
+  const out = formatWeixinAccessCopyPaste('en');
+  assert.match(out, /\/access read-only/);
+  assert.match(out, /\/access default/);
+  assert.match(out, /\/access full-access/);
+});
+
+test('formatWeixinWhereNavCopyPaste adds /reveal when bound', () => {
+  assert.doesNotMatch(formatWeixinWhereNavCopyPaste('en', false), /\/reveal/);
+  assert.match(formatWeixinWhereNavCopyPaste('en', true), /\/reveal/);
 });

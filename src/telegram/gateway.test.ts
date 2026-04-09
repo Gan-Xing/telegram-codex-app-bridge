@@ -40,7 +40,7 @@ test('TelegramGateway emits media messages with caption and attachments', async 
   assert.equal(events.length, 1);
   assert.equal(events[0]?.text, '看看这张图');
   assert.equal(events[0]?.attachments.length, 1);
-  assert.equal(events[0]?.scopeId, '99::root');
+  assert.equal(events[0]?.scopeId, 'telegram:99::root');
   assert.equal(events[0]?.topicId, null);
   assert.equal(events[0]?.replyToBot, false);
   assert.deepEqual(events[0]?.attachments[0], {
@@ -116,7 +116,7 @@ test('TelegramGateway emits topic messages for the configured group chat', async
   });
 
   assert.equal(events.length, 1);
-  assert.equal(events[0]?.scopeId, '-100123::8');
+  assert.equal(events[0]?.scopeId, 'telegram:-100123::8');
   assert.equal(events[0]?.chatType, 'supergroup');
   assert.equal(events[0]?.topicId, 8);
   assert.equal(events[0]?.replyToBot, true);
@@ -141,7 +141,7 @@ test('TelegramGateway still emits private chat messages when a group chat is con
   });
 
   assert.equal(events.length, 1);
-  assert.equal(events[0]?.scopeId, '99::root');
+  assert.equal(events[0]?.scopeId, 'telegram:99::root');
   assert.equal(events[0]?.chatType, 'private');
   assert.equal(events[0]?.topicId, null);
 });

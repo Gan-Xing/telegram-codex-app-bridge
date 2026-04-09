@@ -32,10 +32,14 @@ function acquireProcessLockInternal(lockPath: string, allowStaleRetry: boolean):
         released = true;
         try {
           fs.closeSync(fd);
-        } catch {}
+        } catch {
+          void 0;
+        }
         try {
           fs.rmSync(lockPath, { force: true });
-        } catch {}
+        } catch {
+          void 0;
+        }
       },
     };
   } catch (error) {

@@ -57,6 +57,8 @@ export interface TelegramInboundAttachment {
   durationSeconds: number | null;
   isAnimated: boolean;
   isVideo: boolean;
+  /** When set, {@link stageAttachments} copies this file instead of Telegram Bot API download. */
+  localPath?: string;
 }
 
 export interface StagedTelegramAttachment extends TelegramInboundAttachment {

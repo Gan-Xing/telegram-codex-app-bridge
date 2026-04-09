@@ -1,3 +1,4 @@
+/** Session row: `chatId` holds the bridge scope id (e.g. `telegram:…`). */
 export interface ThreadBinding {
   chatId: string;
   threadId: string;
@@ -13,6 +14,7 @@ export type ReasoningEffortValue = 'none' | 'minimal' | 'low' | 'medium' | 'high
 export type ThreadStatusKind = 'active' | 'idle' | 'notLoaded' | 'systemError';
 
 export interface ChatSessionSettings {
+  /** Bridge scope id (e.g. `telegram:…`). */
   chatId: string;
   model: string | null;
   reasoningEffort: ReasoningEffortValue | null;
@@ -38,8 +40,32 @@ export interface AppThread {
   preview: string;
   cwd: string | null;
   modelProvider: string | null;
+  source: string | null;
+  path: string | null;
   status: ThreadStatusKind;
   updatedAt: number;
+}
+
+export interface AppTurnItemSnapshot {
+  itemId: string;
+  type: string;
+  phase: string | null;
+  text: string | null;
+  command: string | null;
+  status: string | null;
+  aggregatedOutput: string | null;
+}
+
+export interface AppTurnSnapshot {
+  turnId: string;
+  status: string;
+  error: string | null;
+  items: AppTurnItemSnapshot[];
+}
+
+export interface AppThreadSnapshot extends AppThread {
+  activeFlags: string[];
+  turns: AppTurnSnapshot[];
 }
 
 export interface ThreadSessionState {
@@ -66,6 +92,7 @@ export interface PendingApprovalRecord {
   localId: string;
   serverRequestId: string;
   kind: ApprovalKind;
+  /** Bridge scope id (e.g. `telegram:…`). */
   chatId: string;
   threadId: string;
   turnId: string;
@@ -89,4 +116,6 @@ export interface RuntimeStatus {
   activeTurns: number;
   lastError: string | null;
   updatedAt: string;
+  /** Which messaging transports are expected active in this process. */
+  channels?: { telegram: boolean; weixin: boolean };
 }

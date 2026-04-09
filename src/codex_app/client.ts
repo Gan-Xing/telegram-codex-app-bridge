@@ -5,6 +5,7 @@ import type { Readable } from 'node:stream';
 import type { Logger } from '../logger.js';
 import type {
   AppThread,
+  AppThreadSnapshot,
   ModelInfo,
   ReasoningEffortValue,
   SandboxModeValue,
@@ -132,6 +133,12 @@ export class CodexAppClient extends EventEmitter {
     const result = await this.request('thread/read', { threadId, includeTurns });
     const thread = (result as any).thread;
     return thread ? mapThread(thread) : null;
+  }
+
+  async readThreadSnapshot(threadId: string): Promise<AppThreadSnapshot | null> {
+    const result = await this.request('thread/read', { threadId, includeTurns: true });
+    const thread = (result as any).thread;
+    return thread ? mapThreadSnapshot(thread) : null;
   }
 
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {
@@ -280,7 +287,7 @@ export class CodexAppClient extends EventEmitter {
       clientInfo: {
         name: 'telegram-codex-app-bridge',
         title: 'Telegram Codex App Bridge',
-        version: '0.1.0',
+        version: '0.2.0',
       },
       capabilities: {
         experimentalApi: true,
@@ -404,8 +411,26 @@ function mapThread(raw: any): AppThread {
     preview: String(raw.preview || '(empty)'),
     cwd: raw.cwd ? String(raw.cwd) : null,
     modelProvider: raw.modelProvider ? String(raw.modelProvider) : null,
+    source: raw.source ? String(raw.source) : null,
+    path: raw.path ? String(raw.path) : null,
     status: mapThreadStatus(raw.status),
     updatedAt: Number(raw.updatedAt || 0),
+  };
+}
+
+function mapThreadSnapshot(raw: any): AppThreadSnapshot {
+  const base = mapThread(raw);
+  const activeFlags = Array.isArray(raw?.status?.activeFlags)
+    ? raw.status.activeFlags
+        .filter((entry: unknown): entry is string => typeof entry === 'string')
+    : [];
+  const turns = Array.isArray(raw?.turns)
+    ? raw.turns.map(mapTurnSnapshot)
+    : [];
+  return {
+    ...base,
+    activeFlags,
+    turns,
   };
 }
 
@@ -424,6 +449,27 @@ function mapThreadSessionState(raw: any): ThreadSessionState {
     modelProvider: String(raw.modelProvider),
     reasoningEffort: raw.reasoningEffort === null ? null : String(raw.reasoningEffort) as ReasoningEffortValue,
     cwd: String(raw.cwd),
+  };
+}
+
+function mapTurnSnapshot(raw: any) {
+  return {
+    turnId: String(raw?.id || ''),
+    status: String(raw?.status || 'unknown'),
+    error: raw?.error ? String(raw.error) : null,
+    items: Array.isArray(raw?.items) ? raw.items.map(mapTurnItemSnapshot) : [],
+  };
+}
+
+function mapTurnItemSnapshot(raw: any) {
+  return {
+    itemId: String(raw?.id || ''),
+    type: String(raw?.type || ''),
+    phase: raw?.phase ? String(raw.phase) : null,
+    text: raw?.text ? String(raw.text) : null,
+    command: raw?.command ? String(raw.command) : null,
+    status: raw?.status ? String(raw.status) : null,
+    aggregatedOutput: raw?.aggregatedOutput ? String(raw.aggregatedOutput) : null,
   };
 }
 

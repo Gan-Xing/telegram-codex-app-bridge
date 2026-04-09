@@ -21,6 +21,11 @@ export type TurnOutputKind = 'commentary' | 'final_answer' | 'tool_summary' | 'e
 
 export type TurnActivityEvent =
   | {
+      kind: 'user_message';
+      turnId: string;
+      text: string;
+    }
+  | {
       kind: 'agent_message_started';
       turnId: string;
       itemId: string;
