@@ -179,8 +179,12 @@ function Sanitize-InstanceId {
 function Resolve-BridgeEngine {
   param([string]$Value)
 
-  if ($Value -and $Value.Trim().ToLowerInvariant() -eq 'gemini') {
+  $normalized = if ($Value) { $Value.Trim().ToLowerInvariant() } else { 'codex' }
+  if ($normalized -eq 'gemini') {
     return 'gemini'
+  }
+  if ($normalized -eq 'claude') {
+    return 'claude'
   }
 
   return 'codex'
@@ -232,6 +236,9 @@ function Format-EngineDisplayName {
 
   if ($BridgeEngine -eq 'gemini') {
     return 'Gemini'
+  }
+  if ($BridgeEngine -eq 'claude') {
+    return 'Claude'
   }
 
   return 'Codex'

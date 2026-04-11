@@ -98,6 +98,7 @@ resolve_bridge_engine() {
   raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
   case "$raw" in
     gemini) printf 'gemini' ;;
+    claude) printf 'claude' ;;
     *) printf 'codex' ;;
   esac
 }
@@ -121,6 +122,7 @@ format_engine_display_name() {
   local engine="${1:-codex}"
   case "$engine" in
     gemini) printf 'Gemini' ;;
+    claude) printf 'Claude' ;;
     *) printf 'Codex' ;;
   esac
 }
