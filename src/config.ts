@@ -7,7 +7,7 @@ import type { LogLevel } from './logger.js';
 import { detectPlatformCapabilities, getCommandLookupProgram, type PlatformCapabilities } from './platform/capabilities.js';
 import type { ApprovalPolicyValue, SandboxModeValue } from './types.js';
 
-export type BridgeEngineValue = 'codex' | 'gemini';
+export type BridgeEngineValue = 'codex' | 'gemini' | 'claude';
 
 export const LEGACY_APP_HOME = path.join(os.homedir(), '.telegram-codex-app-bridge');
 export const INSTANCES_APP_HOME = path.join(LEGACY_APP_HOME, 'instances');
@@ -24,10 +24,17 @@ export interface AppConfig {
   tgAllowedTopicId: number | null;
   codexCliBin: string;
   geminiCliBin: string;
+  claudeCliBin?: string;
   geminiDefaultModel: string | null;
   geminiModelAllowlist: string[];
   geminiIncludeDirectories: string[];
   geminiHeadlessTimeoutMs: number;
+  claudeDefaultModel?: string | null;
+  claudeModelAllowlist?: string[];
+  claudeIncludeDirectories?: string[];
+  claudeAllowedTools?: string[];
+  claudePermissionMode?: 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'plan';
+  claudeHeadlessTimeoutMs?: number;
   codexAppAutolaunch: boolean;
   codexAppLaunchCmd: string;
   codexAppSyncOnOpen: boolean;
@@ -61,10 +68,17 @@ export function loadConfig(): AppConfig {
     tgAllowedTopicId: nullableIntEnv('TG_ALLOWED_TOPIC_ID'),
     codexCliBin: process.env.CODEX_CLI_BIN || resolveCommand('codex') || 'codex',
     geminiCliBin: process.env.GEMINI_CLI_BIN || resolveCommand('gemini') || 'gemini',
+    claudeCliBin: process.env.CLAUDE_CLI_BIN || resolveCommand('claude') || 'claude',
     geminiDefaultModel: optional('GEMINI_DEFAULT_MODEL'),
     geminiModelAllowlist: listEnv('GEMINI_MODEL_ALLOWLIST'),
     geminiIncludeDirectories: listEnv('GEMINI_INCLUDE_DIRECTORIES'),
     geminiHeadlessTimeoutMs: intEnv('GEMINI_HEADLESS_TIMEOUT_MS', 15 * 60 * 1000),
+    claudeDefaultModel: optional('CLAUDE_DEFAULT_MODEL'),
+    claudeModelAllowlist: listEnv('CLAUDE_MODEL_ALLOWLIST'),
+    claudeIncludeDirectories: listEnv('CLAUDE_INCLUDE_DIRECTORIES'),
+    claudeAllowedTools: listEnv('CLAUDE_ALLOWED_TOOLS'),
+    claudePermissionMode: parseClaudePermissionMode(process.env.CLAUDE_PERMISSION_MODE || 'default'),
+    claudeHeadlessTimeoutMs: intEnv('CLAUDE_HEADLESS_TIMEOUT_MS', 15 * 60 * 1000),
     codexAppAutolaunch: boolEnv('CODEX_APP_AUTOLAUNCH', platform.os === 'darwin'),
     codexAppLaunchCmd: process.env.CODEX_APP_LAUNCH_CMD || '',
     codexAppSyncOnOpen: boolEnv('CODEX_APP_SYNC_ON_OPEN', true),
@@ -145,7 +159,14 @@ export function resolveBridgeRuntimePaths(
 }
 
 export function resolveBridgeEngine(rawValue: string | null | undefined): BridgeEngineValue {
-  return rawValue?.trim().toLowerCase() === 'gemini' ? 'gemini' : 'codex';
+  const normalized = rawValue?.trim().toLowerCase();
+  if (normalized === 'gemini') {
+    return 'gemini';
+  }
+  if (normalized === 'claude') {
+    return 'claude';
+  }
+  return 'codex';
 }
 
 export function resolveBridgeInstanceId(
@@ -250,6 +271,18 @@ function parseApprovalPolicy(value: string): AppConfig['defaultApprovalPolicy'] 
 function parseSandboxMode(value: string): AppConfig['defaultSandboxMode'] {
   if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
   return 'workspace-write';
+}
+
+function parseClaudePermissionMode(value: string): NonNullable<AppConfig['claudePermissionMode']> {
+  if (value === 'default'
+    || value === 'acceptEdits'
+    || value === 'auto'
+    || value === 'bypassPermissions'
+    || value === 'dontAsk'
+    || value === 'plan') {
+    return value;
+  }
+  return 'default';
 }
 
 function sanitizeInstanceId(rawValue: string | null | undefined): string | null {

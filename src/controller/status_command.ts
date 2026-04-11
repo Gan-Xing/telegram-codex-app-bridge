@@ -24,7 +24,7 @@ interface StatusCommandHost {
   lastError: () => string | null;
   updateStatus: () => void;
   config: {
-    bridgeEngine: 'codex' | 'gemini';
+    bridgeEngine: 'codex' | 'gemini' | 'claude';
     bridgeInstanceId: string | null;
     codexAppSyncOnOpen: boolean;
     codexAppSyncOnTurnComplete: boolean;

@@ -13,6 +13,7 @@ const EN_MESSAGES = {
     no_cwd: '(no cwd)',
     engine_codex: 'Codex',
     engine_gemini: 'Gemini CLI',
+    engine_claude: 'Claude Code',
     help_commands_title: 'Commands:',
     help_advanced_aliases: 'Advanced aliases: /model, /effort, /tier, /fast, /access, /plan',
     help_plain_text_hint: 'Plain text continues the thread. Photos and files are saved first, then used when you send your next message.',
@@ -472,6 +473,7 @@ const ZH_MESSAGES = {
     no_cwd: '（无工作目录）',
     engine_codex: 'Codex',
     engine_gemini: 'Gemini CLI',
+    engine_claude: 'Claude Code',
     help_commands_title: '命令列表：',
     help_advanced_aliases: '高级别名：/model、/effort、/tier、/fast、/access、/plan',
     help_plain_text_hint: '直接发送普通文本会继续当前线程。图片和文件会先保存，等你下一条消息再一起带给当前 bot。',
@@ -1218,7 +1220,7 @@ export function t(locale: AppLocale, key: MessageKey, params: MessageParams = {}
 
 export function getTelegramCommands(
   locale: AppLocale,
-  engine: 'codex' | 'gemini' = 'codex',
+  engine: 'codex' | 'gemini' | 'claude' = 'codex',
   options: { restart?: boolean } = {},
 ): Array<{ command: string; description: string }> {
   const includeRestart = options.restart ?? true;
@@ -1231,6 +1233,21 @@ export function getTelegramCommands(
       { command: 'new', description: t(locale, 'cmd_desc_new') },
       { command: 'models', description: t(locale, 'cmd_desc_models') },
       { command: 'mode', description: t(locale, 'cmd_desc_mode') },
+      { command: 'settings', description: t(locale, 'cmd_desc_settings') },
+      ...(includeRestart ? [{ command: 'restart', description: t(locale, 'cmd_desc_restart') }] : []),
+      { command: 'queue', description: t(locale, 'cmd_desc_queue') },
+      { command: 'where', description: t(locale, 'cmd_desc_where') },
+      { command: 'interrupt', description: t(locale, 'cmd_desc_interrupt') },
+    ];
+  }
+  if (engine === 'claude') {
+    return [
+      { command: 'help', description: t(locale, 'cmd_desc_help') },
+      { command: 'status', description: t(locale, 'cmd_desc_status') },
+      { command: 'threads', description: t(locale, 'cmd_desc_threads') },
+      { command: 'open', description: t(locale, 'cmd_desc_open') },
+      { command: 'new', description: t(locale, 'cmd_desc_new') },
+      { command: 'models', description: t(locale, 'cmd_desc_models') },
       { command: 'settings', description: t(locale, 'cmd_desc_settings') },
       ...(includeRestart ? [{ command: 'restart', description: t(locale, 'cmd_desc_restart') }] : []),
       { command: 'queue', description: t(locale, 'cmd_desc_queue') },

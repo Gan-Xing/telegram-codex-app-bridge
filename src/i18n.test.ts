@@ -27,6 +27,9 @@ test('getTelegramCommands returns localized descriptions', () => {
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'models')?.description, 'Model settings');
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'mode')?.description, 'Mode settings');
   assert.equal(getTelegramCommands('zh', 'gemini').find((entry) => entry.command === 'interrupt')?.description, '中断当前回复');
+  assert.equal(getTelegramCommands('en', 'claude').find((entry) => entry.command === 'threads')?.description, 'Recent threads');
+  assert.equal(getTelegramCommands('en', 'claude').find((entry) => entry.command === 'mode'), undefined);
+  assert.equal(getTelegramCommands('fr', 'claude').find((entry) => entry.command === 'settings')?.description, 'Parametres unifies');
 });
 
 test('t interpolates localized templates', () => {
@@ -34,5 +37,6 @@ test('t interpolates localized templates', () => {
   assert.equal(t('zh', 'bound_to_thread', { threadId: 'abc' }), '已绑定到线程 abc');
   assert.equal(t('en', 'engine_codex'), 'Codex');
   assert.equal(t('zh', 'engine_gemini'), 'Gemini CLI');
+  assert.equal(t('en', 'engine_claude'), 'Claude Code');
   assert.equal(t('en', 'attachment_batch_resolved_started'), 'Started using these attachments with this bot.');
 });

@@ -10,7 +10,7 @@ export class ProviderError extends Error {
 
 export class ProviderUnsupportedError extends ProviderError {
   constructor(
-    readonly engine: 'codex' | 'gemini',
+    readonly engine: 'codex' | 'gemini' | 'claude',
     readonly feature: string,
     message?: string,
   ) {
@@ -20,7 +20,7 @@ export class ProviderUnsupportedError extends ProviderError {
 }
 
 export function unsupportedProviderFeature(
-  engine: 'codex' | 'gemini',
+  engine: 'codex' | 'gemini' | 'claude',
   feature: string,
   message?: string,
 ): ProviderUnsupportedError {

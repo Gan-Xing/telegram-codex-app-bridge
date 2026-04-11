@@ -281,7 +281,7 @@ export interface AccountIdentitySnapshot {
 }
 
 export interface RuntimeStatus {
-  engine: 'codex' | 'gemini';
+  engine: 'codex' | 'gemini' | 'claude';
   instanceId: string | null;
   running: boolean;
   connected: boolean;

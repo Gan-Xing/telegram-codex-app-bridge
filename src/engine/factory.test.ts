@@ -58,3 +58,12 @@ test('createEngineProvider returns a gemini provider for gemini instances', () =
 
   assert.equal(provider.engine, 'gemini');
 });
+
+test('createEngineProvider returns a claude provider for claude instances', () => {
+  const provider = createEngineProvider(
+    makeConfig('claude'),
+    new Logger('error', path.join(os.tmpdir(), 'telegram-claude-engine-factory.log')),
+  );
+
+  assert.equal(provider.engine, 'claude');
+});

@@ -116,7 +116,7 @@ export function resolveEngineCapabilities(
 }
 
 export interface EngineProvider {
-  readonly engine: 'codex' | 'gemini';
+  readonly engine: 'codex' | 'gemini' | 'claude';
   readonly capabilities: EngineCapabilities;
 
   on(event: 'notification', listener: (message: EngineNotification) => void): this;

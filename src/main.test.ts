@@ -114,6 +114,40 @@ test('doctor validates gemini cli availability when gemini is configured', () =>
   assert.match(result.stdout, /\[OK\] gemini cli available/);
 });
 
+test('doctor validates claude cli availability when claude is configured', () => {
+  const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-doctor-claude-'));
+  const fakeClaude = createFakeCli(tempDir, 'fake-claude', ['exit 0']);
+  const envFile = path.join(tempDir, '.env.claude');
+  const defaultCwd = path.join(tempDir, 'workspace');
+  fs.mkdirSync(defaultCwd, { recursive: true });
+  fs.writeFileSync(envFile, [
+    'BRIDGE_ENGINE=claude',
+    'TG_BOT_TOKEN=dummy-token',
+    'TG_ALLOWED_USER_ID=1',
+    `CLAUDE_CLI_BIN=${fakeClaude}`,
+    `DEFAULT_CWD=${defaultCwd}`,
+  ].join('\n'), 'utf8');
+
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'src/main.ts', 'doctor'], {
+    cwd: rootDir,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ENV_FILE: envFile,
+      BRIDGE_ENGINE: 'claude',
+      CLAUDE_CLI_BIN: fakeClaude,
+      TG_BOT_TOKEN: 'dummy-token',
+      TG_ALLOWED_USER_ID: '1',
+      DEFAULT_CWD: defaultCwd,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /\[OK\] claude engine runtime available/);
+  assert.match(result.stdout, /\[OK\] claude cli available/);
+});
+
 function createFakeCli(tempDir: string, baseName: string, shellLines: string[]): string {
   if (process.platform === 'win32') {
     const scriptPath = path.join(tempDir, `${baseName}.cmd`);

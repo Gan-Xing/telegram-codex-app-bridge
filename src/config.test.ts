@@ -60,6 +60,17 @@ test('resolveBridgeRuntimePaths derives a dedicated instance home for gemini by 
   assert.equal(paths.storePath, path.join(expectedHome, 'data', 'bridge.sqlite'));
 });
 
+test('resolveBridgeRuntimePaths derives a dedicated instance home for claude by default', () => {
+  const homeDir = path.join(os.tmpdir(), 'telegram-codex-claude-config-home');
+  const paths = resolveBridgeRuntimePaths({ BRIDGE_ENGINE: 'claude' }, homeDir);
+  const expectedHome = path.join(homeDir, '.telegram-codex-app-bridge', 'instances', 'claude');
+
+  assert.equal(paths.bridgeEngine, 'claude');
+  assert.equal(paths.bridgeInstanceId, 'claude');
+  assert.equal(paths.bridgeHome, expectedHome);
+  assert.equal(paths.storePath, path.join(expectedHome, 'data', 'bridge.sqlite'));
+});
+
 test('loadConfig reads bridge runtime settings from ENV_FILE', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-config-test-'));
   const envFile = path.join(tempDir, '.env.gemini');

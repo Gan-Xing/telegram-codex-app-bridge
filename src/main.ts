@@ -29,6 +29,8 @@ async function main(): Promise<void> {
   if (command === 'doctor') {
     const configuredEngine = resolveBridgeRuntimePaths().bridgeEngine;
     const configuredCodexBin = process.env.CODEX_CLI_BIN;
+    const configuredGeminiBin = process.env.GEMINI_CLI_BIN;
+    const configuredClaudeBin = process.env.CLAUDE_CLI_BIN;
     const platform = detectPlatformCapabilities();
     const desktopOpen = getDesktopOpenSupport();
     const checks = [
@@ -36,20 +38,27 @@ async function main(): Promise<void> {
       {
         name: configuredEngine === 'codex'
           ? 'codex engine runtime available'
-          : 'gemini engine runtime available',
+          : configuredEngine === 'gemini'
+            ? 'gemini engine runtime available'
+            : 'claude engine runtime available',
         ok: true,
         required: true,
       },
       { name: 'node >= 24', ok: Number(process.versions.node.split('.')[0]) >= 24, required: true },
       {
         name: 'codex cli available',
-        ok: configuredEngine !== 'codex' || hasConfiguredCodexBin(configuredCodexBin) || hasCommand('codex'),
+        ok: configuredEngine !== 'codex' || hasConfiguredCliBin(configuredCodexBin) || hasCommand('codex'),
         required: configuredEngine === 'codex',
       },
       {
         name: 'gemini cli available',
-        ok: configuredEngine !== 'gemini' || hasConfiguredGeminiBin(process.env.GEMINI_CLI_BIN) || hasCommand('gemini'),
+        ok: configuredEngine !== 'gemini' || hasConfiguredCliBin(configuredGeminiBin) || hasCommand('gemini'),
         required: configuredEngine === 'gemini',
+      },
+      {
+        name: 'claude cli available',
+        ok: configuredEngine !== 'claude' || hasConfiguredCliBin(configuredClaudeBin) || hasCommand('claude'),
+        required: configuredEngine === 'claude',
       },
       {
         name: 'codex app-server available',
@@ -168,17 +177,7 @@ function hasCommand(commandName: string): boolean {
   }
 }
 
-function hasConfiguredCodexBin(binPath: string | undefined): boolean {
-  if (!binPath || !binPath.trim()) return false;
-  try {
-    fs.accessSync(binPath, executableAccessMode());
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function hasConfiguredGeminiBin(binPath: string | undefined): boolean {
+function hasConfiguredCliBin(binPath: string | undefined): boolean {
   if (!binPath || !binPath.trim()) return false;
   try {
     fs.accessSync(binPath, executableAccessMode());
@@ -193,7 +192,7 @@ function executableAccessMode(): number {
 }
 
 function hasCodexAppServer(configuredCodexBin: string | undefined): boolean {
-  if (configuredCodexBin && hasConfiguredCodexBin(configuredCodexBin)) {
+  if (configuredCodexBin && hasConfiguredCliBin(configuredCodexBin)) {
     try {
       const result = spawnCommandSync(configuredCodexBin, ['app-server', '--help'], { stdio: 'ignore' });
       return result.status === 0;

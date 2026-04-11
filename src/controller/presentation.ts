@@ -578,7 +578,13 @@ export function formatEngineModeLabel(
 }
 
 export function formatBridgeEngineLabel(locale: AppLocale, engine: BridgeEngineValue): string {
-  return engine === 'gemini' ? t(locale, 'engine_gemini') : t(locale, 'engine_codex');
+  if (engine === 'gemini') {
+    return t(locale, 'engine_gemini');
+  }
+  if (engine === 'claude') {
+    return t(locale, 'engine_claude');
+  }
+  return t(locale, 'engine_codex');
 }
 
 export function formatTelegramScopeLabel(locale: AppLocale, scopeId: string): string {
