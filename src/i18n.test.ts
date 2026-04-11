@@ -22,7 +22,8 @@ test('getTelegramCommands returns localized descriptions', () => {
   assert.equal(getTelegramCommands('fr').find((entry) => entry.command === 'models')?.description, 'Parametres du modele');
   assert.equal(getTelegramCommands('fr').find((entry) => entry.command === 'restart')?.description, 'Redemarrer le bridge');
   assert.equal(getTelegramCommands('en', 'codex', { restart: false }).find((entry) => entry.command === 'restart'), undefined);
-  assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'threads'), undefined);
+  assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'threads')?.description, 'Recent threads');
+  assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'open')?.description, 'Open a cached thread');
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'models')?.description, 'Model settings');
   assert.equal(getTelegramCommands('en', 'gemini').find((entry) => entry.command === 'mode')?.description, 'Mode settings');
   assert.equal(getTelegramCommands('zh', 'gemini').find((entry) => entry.command === 'interrupt')?.description, '中断当前回复');

@@ -73,7 +73,7 @@ const GEMINI_STREAM_INTERVAL_MS = 120;
 export class GeminiEngineProvider extends EventEmitter implements EngineProvider {
   readonly engine = 'gemini' as const;
   readonly capabilities = {
-    threads: false,
+    threads: true,
     reveal: false,
     guidedPlan: 'none',
     approvals: 'none',

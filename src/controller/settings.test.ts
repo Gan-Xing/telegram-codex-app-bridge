@@ -252,7 +252,7 @@ test('gemini /mode accepts yolo and persists it as the next approval mode', asyn
     },
     app: makeApp({
       capabilities: {
-        threads: false,
+        threads: true,
         reveal: false,
         guidedPlan: 'none',
         approvals: 'none',

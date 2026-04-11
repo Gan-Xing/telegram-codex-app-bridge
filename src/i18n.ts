@@ -1226,6 +1226,8 @@ export function getTelegramCommands(
     return [
       { command: 'help', description: t(locale, 'cmd_desc_help') },
       { command: 'status', description: t(locale, 'cmd_desc_status') },
+      { command: 'threads', description: t(locale, 'cmd_desc_threads') },
+      { command: 'open', description: t(locale, 'cmd_desc_open') },
       { command: 'new', description: t(locale, 'cmd_desc_new') },
       { command: 'models', description: t(locale, 'cmd_desc_models') },
       { command: 'mode', description: t(locale, 'cmd_desc_mode') },

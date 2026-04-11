@@ -205,7 +205,7 @@ test('/status hides Codex-only sections for Gemini instances', async () => {
     },
     app: makeApp({
       capabilities: {
-        threads: false,
+        threads: true,
         reveal: false,
         guidedPlan: 'none',
         approvals: 'none',
