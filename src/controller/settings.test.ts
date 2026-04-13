@@ -190,6 +190,42 @@ test('settings callback shows stripped model name for cliproxyapi models', async
   });
 });
 
+test('settings callback updates explicit model variant for OpenCode-style models', async () => {
+  await withComposition(async (composition, store, bot) => {
+    store.setChatSettings('chat-1', 'cliproxy/gpt-5', 'high', 'en', 'high');
+
+    await composition.telegramRouter.handleCallback(makeCallback('settings:variant:max'));
+
+    const settings = store.getChatSettings('chat-1');
+    assert.equal(settings?.modelVariant, 'max');
+    assert.equal(settings?.reasoningEffort, null);
+    assert.match(bot.edits[0]?.text ?? '', /Variant: <b>max<\/b>/);
+    assert.match(bot.answers[0] ?? '', /Variant: max/);
+  }, {
+    config: {
+      bridgeEngine: 'opencode',
+      bridgeInstanceId: 'linux144-opencode',
+    },
+    app: makeApp({
+      models: [{
+        id: 'cliproxy/gpt-5',
+        model: 'cliproxy/gpt-5',
+        displayName: 'CLIProxyAPI: GPT-5',
+        description: 'OpenCode provider model',
+        isDefault: true,
+        supportedReasoningEfforts: ['medium', 'high'],
+        defaultReasoningEffort: 'medium',
+        supportedVariants: ['medium', 'high', 'max'],
+        variantReasoningEfforts: {
+          medium: 'medium',
+          high: 'high',
+          max: null,
+        },
+      }],
+    }),
+  });
+});
+
 test('mode callback clears pending guided-plan prompts and shows the current scope', async () => {
   await withComposition(async (composition, store, bot) => {
     store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');

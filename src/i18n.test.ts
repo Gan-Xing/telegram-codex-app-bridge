@@ -17,7 +17,7 @@ test('getTelegramCommands returns localized descriptions', () => {
   assert.equal(getTelegramCommands('en').find((entry) => entry.command === 'tier')?.description, 'Service tier');
   assert.equal(getTelegramCommands('zh').find((entry) => entry.command === 'fast')?.description, '快档');
   assert.equal(getTelegramCommands('en').find((entry) => entry.command === 'mode')?.description, 'Mode settings');
-  assert.equal(getTelegramCommands('en').find((entry) => entry.command === 'reconnect')?.description, 'Reconnect Codex session');
+  assert.equal(getTelegramCommands('en').find((entry) => entry.command === 'reconnect')?.description, 'Reconnect session');
   assert.equal(getTelegramCommands('zh').find((entry) => entry.command === 'restart')?.description, '重启桥接服务');
   assert.equal(getTelegramCommands('fr').find((entry) => entry.command === 'models')?.description, 'Parametres du modele');
   assert.equal(getTelegramCommands('fr').find((entry) => entry.command === 'restart')?.description, 'Redemarrer le bridge');
@@ -32,6 +32,7 @@ test('getTelegramCommands returns localized descriptions', () => {
   assert.equal(getTelegramCommands('fr', 'claude').find((entry) => entry.command === 'settings')?.description, 'Parametres unifies');
   assert.equal(getTelegramCommands('en', 'opencode').find((entry) => entry.command === 'permissions')?.description, 'Access settings');
   assert.equal(getTelegramCommands('en', 'opencode').find((entry) => entry.command === 'mode'), undefined);
+  assert.equal(getTelegramCommands('en', 'opencode').find((entry) => entry.command === 'reconnect')?.description, 'Reconnect session');
 });
 
 test('t interpolates localized templates', () => {

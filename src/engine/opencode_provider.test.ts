@@ -370,3 +370,195 @@ test('opencode provider recreates session when existing permission rules do not 
   assert.equal(promptCalls[0]?.sessionId, 'session-new');
   assert.equal(providerAny.activeTurns.get(result.id)?.threadId, 'session-new');
 });
+
+test('opencode provider lists reasoning efforts from model variants', async () => {
+  const provider = createOpenCodeEngineProvider(
+    makeConfig(),
+    new Logger('error', path.join(os.tmpdir(), 'telegram-opencode-provider-test.log')),
+  );
+  const providerAny = provider as any;
+  providerAny.client = {
+    listProviders: async () => ({
+      default: { cliproxy: 'gpt-5' },
+      providers: [
+        {
+          id: 'cliproxy',
+          name: 'CLIProxyAPI',
+          models: {
+            'gpt-5': {
+              id: 'gpt-5',
+              name: 'GPT-5',
+              providerID: 'cliproxy',
+              capabilities: { reasoning: true },
+              variants: {
+                none: {},
+                minimal: {},
+                low: {},
+                medium: {},
+                high: {},
+                xhigh: {},
+              },
+            },
+            'claude-opus-4-6-thinking': {
+              id: 'claude-opus-4-6-thinking',
+              name: 'Claude Opus 4.6 Thinking',
+              providerID: 'cliproxy',
+              capabilities: { reasoning: true },
+              variants: {
+                high: {},
+                max: {},
+              },
+            },
+          },
+        },
+      ],
+    }),
+  };
+
+  const models = await provider.listModels();
+  const gpt5 = models.find((entry) => entry.model === 'cliproxy/gpt-5');
+  const claude = models.find((entry) => entry.model === 'cliproxy/claude-opus-4-6-thinking');
+
+  assert.deepEqual(gpt5?.supportedReasoningEfforts, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  assert.equal(gpt5?.defaultReasoningEffort, 'medium');
+  assert.deepEqual(gpt5?.supportedVariants, ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+  assert.deepEqual(claude?.supportedReasoningEfforts, ['high']);
+  assert.equal(claude?.defaultReasoningEffort, 'high');
+  assert.deepEqual(claude?.supportedVariants, ['high', 'max']);
+});
+
+test('opencode provider passes reasoning effort as variant when supported by the model', async () => {
+  const provider = createOpenCodeEngineProvider(
+    makeConfig(),
+    new Logger('error', path.join(os.tmpdir(), 'telegram-opencode-provider-test.log')),
+  );
+  const providerAny = provider as any;
+  const promptCalls: Array<{ sessionId: string; body: Record<string, unknown>; directory: string | null | undefined }> = [];
+
+  providerAny.modelsCache = {
+    default: { cliproxy: 'gpt-5' },
+    providers: [
+      {
+        id: 'cliproxy',
+        name: 'CLIProxyAPI',
+        models: {
+          'gpt-5': {
+            id: 'gpt-5',
+            name: 'GPT-5',
+            providerID: 'cliproxy',
+            capabilities: { reasoning: true },
+            variants: {
+              low: {},
+              medium: {},
+              high: {},
+            },
+          },
+        },
+      },
+    ],
+  };
+  providerAny.requireSessionRecord = async () => ({
+    session: {
+      id: 'session-1',
+      slug: 'session-1',
+      directory: '/tmp/project',
+      title: 'session-1',
+      permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+      time: { created: 1, updated: 1 },
+    },
+    preview: '',
+    model: 'cliproxy/gpt-5',
+    modelProvider: 'cliproxy',
+    status: 'idle',
+  });
+  providerAny.ensureSessionPermission = async (record: any) => record;
+  providerAny.client = {
+    promptAsync: async (sessionId: string, body: Record<string, unknown>, directory?: string | null) => {
+      promptCalls.push({ sessionId, body, directory });
+    },
+  };
+
+  await provider.startTurn({
+    threadId: 'session-1',
+    input: [{ type: 'text', text: 'hello', text_elements: [] }],
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    cwd: '/tmp/project',
+    model: 'cliproxy/gpt-5',
+    serviceTier: null,
+    effort: 'high',
+    collaborationMode: null,
+    developerInstructions: null,
+  });
+
+  assert.equal(promptCalls.length, 1);
+  assert.equal(promptCalls[0]?.body.variant, 'high');
+});
+
+test('opencode provider prefers explicit model variant over reasoning effort', async () => {
+  const provider = createOpenCodeEngineProvider(
+    makeConfig(),
+    new Logger('error', path.join(os.tmpdir(), 'telegram-opencode-provider-test.log')),
+  );
+  const providerAny = provider as any;
+  const promptCalls: Array<{ body: Record<string, unknown> }> = [];
+
+  providerAny.modelsCache = {
+    default: { cliproxy: 'gpt-5' },
+    providers: [
+      {
+        id: 'cliproxy',
+        name: 'CLIProxyAPI',
+        models: {
+          'gpt-5': {
+            id: 'gpt-5',
+            name: 'GPT-5',
+            providerID: 'cliproxy',
+            capabilities: { reasoning: true },
+            variants: {
+              medium: { reasoningEffort: 'medium' },
+              high: { reasoningEffort: 'high' },
+              max: { reasoningEffort: 'high' },
+            },
+          },
+        },
+      },
+    ],
+  };
+  providerAny.requireSessionRecord = async () => ({
+    session: {
+      id: 'session-1',
+      slug: 'session-1',
+      directory: '/tmp/project',
+      title: 'session-1',
+      permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+      time: { created: 1, updated: 1 },
+    },
+    preview: '',
+    model: 'cliproxy/gpt-5',
+    modelProvider: 'cliproxy',
+    status: 'idle',
+  });
+  providerAny.ensureSessionPermission = async (record: any) => record;
+  providerAny.client = {
+    promptAsync: async (_sessionId: string, body: Record<string, unknown>) => {
+      promptCalls.push({ body });
+    },
+  };
+
+  await provider.startTurn({
+    threadId: 'session-1',
+    input: [{ type: 'text', text: 'hello', text_elements: [] }],
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    cwd: '/tmp/project',
+    model: 'cliproxy/gpt-5',
+    serviceTier: null,
+    effort: 'high',
+    modelVariant: 'max',
+    collaborationMode: null,
+    developerInstructions: null,
+  });
+
+  assert.equal(promptCalls[0]?.body.variant, 'max');
+});

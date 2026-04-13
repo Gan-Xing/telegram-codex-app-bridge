@@ -82,8 +82,14 @@ export class BridgeStore {
     return this.chatState.getChatSettings(chatId);
   }
 
-  setChatSettings(chatId: string, model: string | null, reasoningEffort: ReasoningEffortValue | null, locale?: AppLocale | null): void {
-    this.chatState.setChatSettings(chatId, model, reasoningEffort, locale);
+  setChatSettings(
+    chatId: string,
+    model: string | null,
+    reasoningEffort: ReasoningEffortValue | null,
+    locale?: AppLocale | null,
+    modelVariant?: string | null,
+  ): void {
+    this.chatState.setChatSettings(chatId, model, reasoningEffort, locale, modelVariant);
   }
 
   setChatLocale(chatId: string, locale: AppLocale): void {
@@ -104,6 +110,10 @@ export class BridgeStore {
 
   setChatServiceTier(chatId: string, serviceTier: ServiceTierValue | null): void {
     this.chatState.setChatServiceTier(chatId, serviceTier);
+  }
+
+  setChatModelVariant(chatId: string, modelVariant: string | null): void {
+    this.chatState.setChatModelVariant(chatId, modelVariant);
   }
 
   setChatGuidedPlanPreferences(

@@ -17,6 +17,7 @@ export function initializeBridgeStoreSchema(db: SqliteDatabase): void {
       chat_id TEXT PRIMARY KEY,
       model TEXT,
       reasoning_effort TEXT,
+      model_variant TEXT,
       service_tier TEXT,
       locale TEXT,
       access_preset TEXT,
@@ -171,6 +172,7 @@ export function initializeBridgeStoreSchema(db: SqliteDatabase): void {
   ensureColumn(db, 'thread_cache', 'model_provider', 'TEXT');
   ensureColumn(db, 'thread_cache', 'status', "TEXT NOT NULL DEFAULT 'idle'");
   ensureColumn(db, 'chat_settings', 'locale', 'TEXT');
+  ensureColumn(db, 'chat_settings', 'model_variant', 'TEXT');
   ensureColumn(db, 'chat_settings', 'service_tier', 'TEXT');
   ensureColumn(db, 'chat_settings', 'access_preset', 'TEXT');
   ensureColumn(db, 'chat_settings', 'collaboration_mode', 'TEXT');

@@ -124,10 +124,10 @@ export class TelegramIngressRouter {
         ),
       },
       {
-        pattern: /^settings:(model|effort|tier|mode|access):(.+)$/,
+        pattern: /^settings:(model|effort|variant|tier|mode|access):(.+)$/,
         handle: (event, match, locale) => this.host.settings.handleSettingsCallback(
           event,
-          match[1]! as 'model' | 'effort' | 'tier' | 'mode' | 'access',
+          match[1]! as 'model' | 'effort' | 'variant' | 'tier' | 'mode' | 'access',
           match[2]!,
           locale,
         ),

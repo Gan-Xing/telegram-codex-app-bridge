@@ -260,6 +260,50 @@ test('buildModelSettingsKeyboard marks selected model and effort', () => {
   assert.equal(keyboard.at(-1)?.[0]?.text, 'Settings');
 });
 
+test('presentation renders and selects explicit model variants', () => {
+  const models: ModelInfo[] = [
+    {
+      id: 'cliproxy/gpt-5',
+      model: 'cliproxy/gpt-5',
+      displayName: 'CLIProxyAPI: GPT-5',
+      description: 'OpenCode provider model',
+      isDefault: true,
+      supportedReasoningEfforts: ['medium', 'high'],
+      defaultReasoningEffort: 'medium',
+      supportedVariants: ['low', 'medium', 'high', 'max'],
+      variantReasoningEfforts: {
+        low: 'low',
+        medium: 'medium',
+        high: 'high',
+        max: null,
+      },
+    },
+  ];
+  const settings: ChatSessionSettings = {
+    chatId: 'chat-variant',
+    model: 'cliproxy/gpt-5',
+    reasoningEffort: null,
+    modelVariant: 'max',
+    serviceTier: null,
+    locale: 'en',
+    accessPreset: null,
+    collaborationMode: null,
+    confirmPlanBeforeExecute: true,
+    autoQueueMessages: true,
+    persistPlanHistory: true,
+    updatedAt: Date.now(),
+  };
+
+  const rendered = formatModelSettingsMessage('en', models, settings);
+  const keyboard = buildModelSettingsKeyboard('en', models, settings);
+
+  assert.match(rendered, /Variant: <b>max<\/b>/);
+  assert.match(rendered, /Supported variants: <code>low, medium, high, max<\/code>/);
+  assert.equal(keyboard[1]?.[0]?.callback_data, 'settings:effort:default');
+  assert.equal(keyboard[2]?.[0]?.callback_data, 'settings:variant:default');
+  assert.equal(keyboard[3]?.[1]?.text, '• max');
+});
+
 test('presentation strips cliproxyapi prefix from displayed model names', () => {
   const models: ModelInfo[] = [
     {
@@ -314,7 +358,10 @@ test('presentation strips generic provider prefixes from OpenCode model names', 
 
   assert.equal(formatModelDisplayName('cliproxy/gemini-3-pro-preview'), 'gemini-3-pro-preview');
   assert.match(rendered, /当前默认目标：<code>gemini-3-pro-preview<\/code>/);
+  assert.match(rendered, /支持的强度：<code>未知<\/code>/);
   assert.equal(keyboard[0]?.[1]?.text, 'gemini-3-pr...');
+  assert.equal(keyboard[1]?.length, 1);
+  assert.equal(keyboard[1]?.[0]?.callback_data, 'settings:effort:default');
   assert.equal(resolveRequestedModel(models, 'gemini-3-pro-preview')?.model, 'cliproxy/gemini-3-pro-preview');
 });
 

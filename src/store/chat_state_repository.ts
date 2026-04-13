@@ -66,6 +66,7 @@ export class ChatStateRepository {
         chat_id,
         model,
         reasoning_effort,
+        model_variant,
         service_tier,
         locale,
         access_preset,
@@ -85,6 +86,7 @@ export class ChatStateRepository {
       chatId: String(row.chat_id),
       model: row.model === null ? null : String(row.model),
       reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort) as ReasoningEffortValue,
+      modelVariant: row.model_variant === null ? null : String(row.model_variant),
       serviceTier: row.service_tier === null ? null : String(row.service_tier) as ServiceTierValue,
       locale: row.locale === null ? null : String(row.locale) as AppLocale,
       accessPreset: row.access_preset === null ? null : String(row.access_preset) as AccessPresetValue,
@@ -97,13 +99,20 @@ export class ChatStateRepository {
     };
   }
 
-  setChatSettings(chatId: string, model: string | null, reasoningEffort: ReasoningEffortValue | null, locale?: AppLocale | null): void {
+  setChatSettings(
+    chatId: string,
+    model: string | null,
+    reasoningEffort: ReasoningEffortValue | null,
+    locale?: AppLocale | null,
+    modelVariant?: string | null,
+  ): void {
     const current = this.getChatSettings(chatId);
     const nextLocale = locale === undefined ? current?.locale ?? null : locale;
     this.writeChatSettings(
       chatId,
       model,
       reasoningEffort,
+      modelVariant === undefined ? current?.modelVariant ?? null : modelVariant,
       current?.serviceTier ?? null,
       nextLocale,
       current?.accessPreset ?? null,
@@ -121,6 +130,7 @@ export class ChatStateRepository {
       chatId,
       current?.model ?? null,
       current?.reasoningEffort ?? null,
+      current?.modelVariant ?? null,
       current?.serviceTier ?? null,
       locale,
       current?.accessPreset ?? null,
@@ -138,6 +148,7 @@ export class ChatStateRepository {
       chatId,
       current?.model ?? null,
       current?.reasoningEffort ?? null,
+      current?.modelVariant ?? null,
       current?.serviceTier ?? null,
       current?.locale ?? null,
       accessPreset,
@@ -155,6 +166,7 @@ export class ChatStateRepository {
       chatId,
       current?.model ?? null,
       current?.reasoningEffort ?? null,
+      current?.modelVariant ?? null,
       current?.serviceTier ?? null,
       current?.locale ?? null,
       current?.accessPreset ?? null,
@@ -172,6 +184,7 @@ export class ChatStateRepository {
       chatId,
       current?.model ?? null,
       current?.reasoningEffort ?? null,
+      current?.modelVariant ?? null,
       current?.serviceTier ?? null,
       current?.locale ?? null,
       current?.accessPreset ?? null,
@@ -189,7 +202,26 @@ export class ChatStateRepository {
       chatId,
       current?.model ?? null,
       current?.reasoningEffort ?? null,
+      current?.modelVariant ?? null,
       serviceTier,
+      current?.locale ?? null,
+      current?.accessPreset ?? null,
+      current?.collaborationMode ?? null,
+      current?.geminiApprovalMode ?? null,
+      current?.confirmPlanBeforeExecute ?? DEFAULT_GUIDED_PLAN_PREFERENCES.confirmPlanBeforeExecute,
+      current?.autoQueueMessages ?? DEFAULT_GUIDED_PLAN_PREFERENCES.autoQueueMessages,
+      current?.persistPlanHistory ?? DEFAULT_GUIDED_PLAN_PREFERENCES.persistPlanHistory,
+    );
+  }
+
+  setChatModelVariant(chatId: string, modelVariant: string | null): void {
+    const current = this.getChatSettings(chatId);
+    this.writeChatSettings(
+      chatId,
+      current?.model ?? null,
+      current?.reasoningEffort ?? null,
+      modelVariant,
+      current?.serviceTier ?? null,
       current?.locale ?? null,
       current?.accessPreset ?? null,
       current?.collaborationMode ?? null,
@@ -209,6 +241,7 @@ export class ChatStateRepository {
       chatId,
       current?.model ?? null,
       current?.reasoningEffort ?? null,
+      current?.modelVariant ?? null,
       current?.serviceTier ?? null,
       current?.locale ?? null,
       current?.accessPreset ?? null,
@@ -322,6 +355,7 @@ export class ChatStateRepository {
     chatId: string,
     model: string | null,
     reasoningEffort: ReasoningEffortValue | null,
+    modelVariant: string | null,
     serviceTier: ServiceTierValue | null,
     locale: AppLocale | null,
     accessPreset: AccessPresetValue | null,
@@ -333,13 +367,14 @@ export class ChatStateRepository {
   ): void {
     this.db.prepare(`
       INSERT INTO chat_settings (
-        chat_id, model, reasoning_effort, service_tier, locale, access_preset, collaboration_mode,
+        chat_id, model, reasoning_effort, model_variant, service_tier, locale, access_preset, collaboration_mode,
         gemini_approval_mode, confirm_plan_before_execute, auto_queue_messages, persist_plan_history, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(chat_id) DO UPDATE SET
         model = excluded.model,
         reasoning_effort = excluded.reasoning_effort,
+        model_variant = excluded.model_variant,
         service_tier = excluded.service_tier,
         locale = excluded.locale,
         access_preset = excluded.access_preset,
@@ -353,6 +388,7 @@ export class ChatStateRepository {
       chatId,
       model,
       reasoningEffort,
+      modelVariant,
       serviceTier,
       locale,
       accessPreset,

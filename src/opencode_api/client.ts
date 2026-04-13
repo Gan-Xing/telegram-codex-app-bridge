@@ -154,6 +154,7 @@ export interface OpenCodeProviderModel {
   capabilities: {
     reasoning: boolean;
   };
+  variants?: Record<string, Record<string, unknown>>;
 }
 
 export interface OpenCodeProviderCatalog {
@@ -206,6 +207,7 @@ export class OpenCodeClient extends EventEmitter {
   private sseLoopPromise: Promise<void> | null = null;
   private readonly recentLogs: string[] = [];
   private authHeader: string | null = null;
+  private restartTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly config: OpenCodeClientConfig,
@@ -245,6 +247,7 @@ export class OpenCodeClient extends EventEmitter {
       this.process = null;
       if (!this.stopping) {
         this.markDisconnected();
+        this.scheduleRestart('process_exit');
       }
     });
     await this.waitForHealth();
@@ -255,6 +258,10 @@ export class OpenCodeClient extends EventEmitter {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     this.streamAbortController?.abort();
     this.streamAbortController = null;
     const processRef = this.process;
@@ -423,6 +430,12 @@ export class OpenCodeClient extends EventEmitter {
         if (this.stopping || controller.signal.aborted) {
           return;
         }
+        if (!this.process) {
+          this.markDisconnected();
+          this.logger.warn('opencode.sse.disconnected', { error: String(error) });
+          this.scheduleRestart('sse_disconnected');
+          return;
+        }
         this.logger.warn('opencode.sse.disconnected', { error: String(error) });
         await delay(1_000);
       } finally {
@@ -471,11 +484,20 @@ export class OpenCodeClient extends EventEmitter {
       }
       url.searchParams.set(key, String(value));
     }
-    const response = await fetch(url, {
-      method,
-      headers: this.buildHeaders(options.body !== undefined),
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers: this.buildHeaders(options.body !== undefined),
+        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+      });
+    } catch (error) {
+      if (!this.stopping && !this.process) {
+        this.markDisconnected();
+        this.scheduleRestart('request_failed');
+      }
+      throw error;
+    }
     if (response.status === 204) {
       return undefined as T;
     }
@@ -536,6 +558,23 @@ export class OpenCodeClient extends EventEmitter {
     }
     this.connected = false;
     this.emit('disconnected');
+  }
+
+  private scheduleRestart(reason: 'process_exit' | 'sse_disconnected' | 'request_failed'): void {
+    if (this.stopping || this.process || this.restartTimer) {
+      return;
+    }
+    this.logger.warn('opencode.restart_scheduled', { reason });
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopping || this.process || this.connected) {
+        return;
+      }
+      void this.start().catch((error) => {
+        this.logger.warn('opencode.restart_failed', { reason, error: String(error) });
+        this.scheduleRestart('process_exit');
+      });
+    }, 1_000);
   }
 }
 

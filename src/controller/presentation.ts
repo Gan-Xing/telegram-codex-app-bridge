@@ -170,6 +170,7 @@ export function formatWhereMessage(
     t(locale, 'where_preview', { value: thread.preview || t(locale, 'empty') }),
     t(locale, 'where_configured_model', { value: formatModelDisplayName(settings?.model) ?? t(locale, 'server_default') }),
     showEffort ? t(locale, 'where_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') }) : null,
+    formatConfiguredVariantLine(locale, 'where_configured_variant', settings),
     showServiceTier ? t(locale, 'where_configured_service_tier', { value: formatServiceTierLabel(locale, settings?.serviceTier ?? null) }) : null,
     showMode ? t(locale, 'where_mode', { value: formatEngineModeLabel(locale, engine, settings) }) : null,
     showAccess ? t(locale, 'where_access_preset', { value: formatAccessPresetLabel(locale, access.preset) }) : null,
@@ -237,6 +238,7 @@ export function formatSettingsHomeMessage(
     showEffort
       ? t(locale, 'status_configured_effort', { value: escapeTelegramHtml(state.settings?.reasoningEffort ?? t(locale, 'server_default')) })
       : null,
+    formatConfiguredVariantLine(locale, 'status_configured_variant', state.settings, true),
     showServiceTier
       ? t(locale, 'status_configured_service_tier', { value: escapeTelegramHtml(formatServiceTierLabel(locale, state.settings?.serviceTier ?? null)) })
       : null,
@@ -359,12 +361,10 @@ export function formatModelSettingsMessage(
   const selectedModel = resolveCurrentModel(models, settings?.model ?? null);
   const selectedModelLabel = formatModelDisplayName(settings?.model) ?? t(locale, 'server_default');
   const selectedEffort = settings?.reasoningEffort ?? null;
+  const selectedVariant = resolveConfiguredModelVariant(selectedModel, settings);
   const selectedServiceTier = settings?.serviceTier ?? null;
-  const supportedEfforts = selectedModel?.supportedReasoningEfforts.length
-    ? selectedModel.supportedReasoningEfforts
-    : selectedModel
-      ? [selectedModel.defaultReasoningEffort]
-      : [];
+  const supportedEfforts = selectedModel?.supportedReasoningEfforts ?? [];
+  const supportedVariants = selectedModel?.supportedVariants ?? [];
 
   return [
     t(locale, 'models_title'),
@@ -372,6 +372,9 @@ export function formatModelSettingsMessage(
     '',
     t(locale, 'models_model', { value: escapeTelegramHtml(selectedModelLabel) }),
     showEffort ? t(locale, 'models_effort', { value: escapeTelegramHtml(selectedEffort ?? t(locale, 'server_default')) }) : null,
+    supportedVariants.length > 0
+      ? t(locale, 'models_variant', { value: escapeTelegramHtml(selectedVariant ?? t(locale, 'server_default')) })
+      : null,
     showServiceTier ? t(locale, 'models_service_tier', { value: escapeTelegramHtml(formatServiceTierLabel(locale, selectedServiceTier)) }) : null,
     selectedModel
       ? t(locale, 'models_current_default_target', {
@@ -383,6 +386,9 @@ export function formatModelSettingsMessage(
       : showEffort
         ? t(locale, 'models_supported_efforts_unknown')
         : null,
+    supportedVariants.length > 0
+      ? t(locale, 'models_supported_variants', { value: escapeTelegramHtml(supportedVariants.join(', ')) })
+      : null,
   ].filter(Boolean).join('\n');
 }
 
@@ -399,11 +405,9 @@ export function buildModelSettingsKeyboard(
   const showServiceTier = options.showServiceTier ?? true;
   const currentModel = settings?.model ?? null;
   const effectiveModel = resolveCurrentModel(models, currentModel);
-  const efforts = effectiveModel?.supportedReasoningEfforts.length
-    ? effectiveModel.supportedReasoningEfforts
-    : effectiveModel
-      ? [effectiveModel.defaultReasoningEffort]
-      : ['medium'];
+  const efforts = effectiveModel?.supportedReasoningEfforts ?? [];
+  const variants = effectiveModel?.supportedVariants ?? [];
+  const selectedVariant = resolveConfiguredModelVariant(effectiveModel, settings);
 
   const modelButtons: InlineButton[] = [
     {
@@ -426,6 +430,18 @@ export function buildModelSettingsKeyboard(
       callback_data: `settings:effort:${effort}`,
     })),
   ];
+  const variantButtons: InlineButton[] = variants.length === 0
+    ? []
+    : [
+        {
+          text: selectedVariant === null ? `• ${t(locale, 'button_auto')}` : t(locale, 'button_auto'),
+          callback_data: 'settings:variant:default',
+        },
+        ...variants.map((variant) => ({
+          text: `${selectedVariant === variant ? '• ' : ''}${truncate(variant, 14)}`,
+          callback_data: `settings:variant:${encodeURIComponent(variant)}`,
+        })),
+      ];
   const serviceTierButtons: InlineButton[] = [
     {
       text: settings?.serviceTier === null ? `• ${t(locale, 'button_auto')}` : t(locale, 'button_auto'),
@@ -444,6 +460,7 @@ export function buildModelSettingsKeyboard(
   return [
     ...chunkButtons(modelButtons, 2),
     ...(showEffort ? chunkButtons(effortButtons, 3) : []),
+    ...chunkButtons(variantButtons, 3),
     ...(showServiceTier ? [serviceTierButtons] : []),
     [{
       text: t(locale, 'button_settings_home'),
@@ -522,6 +539,18 @@ export function normalizeRequestedEffort(value: string): ReasoningEffortValue | 
   return null;
 }
 
+export function normalizeRequestedModelVariant(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return null;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower === 'auto' || lower === 'default' || lower === 'reset' || lower === 'off') {
+    return null;
+  }
+  return normalized;
+}
+
 export function normalizeRequestedServiceTier(value: string): ServiceTierValue | null | undefined {
   const normalized = value.trim().toLowerCase();
   if (!normalized || normalized === 'auto' || normalized === 'default' || normalized === 'reset' || normalized === 'off') {
@@ -547,6 +576,30 @@ export function clampEffortToModel(
     return { effort, adjustedFrom: null };
   }
   return { effort: model.defaultReasoningEffort, adjustedFrom: effort };
+}
+
+export function clampVariantToModel(
+  model: ModelInfo | null,
+  variant: string | null | undefined,
+  fallbackEffort: ReasoningEffortValue | null = null,
+): { variant: string | null; adjustedFrom: string | null } {
+  const normalizedVariant = normalizeRequestedModelVariant(variant);
+  if (!model) {
+    return { variant: normalizedVariant, adjustedFrom: null };
+  }
+  const supportedVariants = model.supportedVariants ?? [];
+  if (supportedVariants.length === 0) {
+    return normalizedVariant === null
+      ? { variant: null, adjustedFrom: null }
+      : { variant: null, adjustedFrom: normalizedVariant };
+  }
+  if (normalizedVariant && supportedVariants.includes(normalizedVariant)) {
+    return { variant: normalizedVariant, adjustedFrom: null };
+  }
+  if (fallbackEffort && supportedVariants.includes(fallbackEffort)) {
+    return { variant: fallbackEffort, adjustedFrom: normalizedVariant };
+  }
+  return { variant: null, adjustedFrom: normalizedVariant };
 }
 
 export function formatAccessPresetLabel(locale: AppLocale, preset: AccessPresetValue): string {
@@ -699,6 +752,35 @@ function escapeTelegramHtml(value: string): string {
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
+}
+
+function resolveConfiguredModelVariant(model: ModelInfo | null, settings: ChatSessionSettings | null): string | null {
+  const supportedVariants = model?.supportedVariants ?? [];
+  if (supportedVariants.length === 0) {
+    return null;
+  }
+  const explicit = normalizeRequestedModelVariant(settings?.modelVariant ?? null);
+  if (explicit && supportedVariants.includes(explicit)) {
+    return explicit;
+  }
+  const effort = settings?.reasoningEffort ?? null;
+  if (effort && supportedVariants.includes(effort)) {
+    return effort;
+  }
+  return null;
+}
+
+function formatConfiguredVariantLine(
+  locale: AppLocale,
+  key: 'status_configured_variant' | 'where_configured_variant',
+  settings: ChatSessionSettings | null,
+  escape = false,
+): string | null {
+  const variant = normalizeRequestedModelVariant(settings?.modelVariant ?? null);
+  if (!variant) {
+    return null;
+  }
+  return t(locale, key, { value: escape ? escapeTelegramHtml(variant) : variant });
 }
 
 function chunkButtons(buttons: InlineButton[], width: number): InlineButton[][] {

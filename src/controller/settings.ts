@@ -11,6 +11,7 @@ import {
   buildModeSettingsKeyboard,
   buildModelSettingsKeyboard,
   clampEffortToModel,
+  clampVariantToModel,
   formatAccessPresetLabel,
   formatAccessSettingsMessage,
   formatApprovalPolicyLabel,
@@ -26,6 +27,7 @@ import {
   formatTelegramScopeLabel,
   formatWhereMessage,
   normalizeRequestedEffort,
+  normalizeRequestedModelVariant,
   normalizeRequestedServiceTier,
   resolveCurrentModel,
   resolveRequestedModel,
@@ -186,17 +188,21 @@ export class SettingsCoordinator {
     if (raw === '' || raw.toLowerCase() === 'default' || raw.toLowerCase() === 'reset') {
       const defaultModel = resolveCurrentModel(models, null);
       const nextEffort = clampEffortToModel(defaultModel, settings?.reasoningEffort ?? null);
-      this.host.store.setChatSettings(scopeId, null, nextEffort.effort);
+      const nextVariant = clampVariantToModel(defaultModel, settings?.modelVariant ?? null, nextEffort.effort);
+      this.host.store.setChatSettings(scopeId, null, nextEffort.effort, undefined, nextVariant.variant);
       const lines = [
         t(locale, 'model_reset'),
         t(locale, 'status_configured_effort', { value: nextEffort.effort ?? t(locale, 'server_default') }),
+        nextVariant.variant !== null || nextVariant.adjustedFrom !== null
+          ? t(locale, 'status_configured_variant', { value: nextVariant.variant ?? t(locale, 'server_default') })
+          : null,
         t(locale, 'applies_next_turn'),
         t(locale, 'tip_use_models'),
       ];
       if (nextEffort.adjustedFrom) {
         lines.splice(1, 0, t(locale, 'effort_adjusted_default_model', { effort: nextEffort.adjustedFrom }));
       }
-      await this.host.messages.sendMessage(scopeId, lines.join('\n'));
+      await this.host.messages.sendMessage(scopeId, lines.filter(Boolean).join('\n'));
       return;
     }
     const selected = resolveRequestedModel(models, raw);
@@ -205,10 +211,14 @@ export class SettingsCoordinator {
       return;
     }
     const nextEffort = clampEffortToModel(selected, settings?.reasoningEffort ?? null);
-    this.host.store.setChatSettings(scopeId, selected.model, nextEffort.effort);
+    const nextVariant = clampVariantToModel(selected, settings?.modelVariant ?? null, nextEffort.effort);
+    this.host.store.setChatSettings(scopeId, selected.model, nextEffort.effort, undefined, nextVariant.variant);
     const lines = [
       t(locale, 'model_configured', { model: formatModelDisplayName(selected.model) ?? selected.model }),
       t(locale, 'status_configured_effort', { value: nextEffort.effort ?? t(locale, 'server_default') }),
+      nextVariant.variant !== null || nextVariant.adjustedFrom !== null
+        ? t(locale, 'status_configured_variant', { value: nextVariant.variant ?? t(locale, 'server_default') })
+        : null,
       t(locale, 'applies_next_turn'),
       t(locale, 'tip_use_models'),
     ];
@@ -218,7 +228,7 @@ export class SettingsCoordinator {
         model: formatModelDisplayName(selected.model) ?? selected.model,
       }));
     }
-    await this.host.messages.sendMessage(scopeId, lines.join('\n'));
+    await this.host.messages.sendMessage(scopeId, lines.filter(Boolean).join('\n'));
   }
 
   async handleEffortCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
@@ -264,12 +274,16 @@ export class SettingsCoordinator {
       );
       return;
     }
-    this.host.store.setChatSettings(scopeId, settings?.model ?? null, effort);
+    const nextVariant = clampVariantToModel(currentModel, effort, effort);
+    this.host.store.setChatSettings(scopeId, settings?.model ?? null, effort, undefined, nextVariant.variant);
     await this.host.messages.sendMessage(scopeId, [
       t(locale, 'effort_configured', { effort }),
+      nextVariant.variant !== null
+        ? t(locale, 'status_configured_variant', { value: nextVariant.variant })
+        : null,
       t(locale, 'applies_next_turn'),
       t(locale, 'tip_use_models'),
-    ].join('\n'));
+    ].filter(Boolean).join('\n'));
   }
 
   async handleTierCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
@@ -315,12 +329,12 @@ export class SettingsCoordinator {
 
   async handleSettingsCallback(
     event: TelegramCallbackEvent,
-    kind: 'model' | 'effort' | 'tier' | 'mode' | 'access',
+    kind: 'model' | 'effort' | 'variant' | 'tier' | 'mode' | 'access',
     rawValue: string,
     locale: AppLocale,
   ): Promise<void> {
     const scopeId = event.scopeId;
-    if ((kind === 'model' || kind === 'effort' || kind === 'tier') && this.host.turns.findByScope(scopeId)) {
+    if ((kind === 'model' || kind === 'effort' || kind === 'variant' || kind === 'tier') && this.host.turns.findByScope(scopeId)) {
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'wait_current_turn'));
       return;
     }
@@ -355,7 +369,8 @@ export class SettingsCoordinator {
       if (value === 'default') {
         const defaultModel = resolveCurrentModel(models, null);
         const nextEffort = clampEffortToModel(defaultModel, settings?.reasoningEffort ?? null);
-        this.host.store.setChatSettings(scopeId, null, nextEffort.effort);
+        const nextVariant = clampVariantToModel(defaultModel, settings?.modelVariant ?? null, nextEffort.effort);
+        this.host.store.setChatSettings(scopeId, null, nextEffort.effort, undefined, nextVariant.variant);
         await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
         await this.host.answerCallback(event.callbackQueryId, t(locale, 'using_server_default_model'));
         return;
@@ -366,7 +381,8 @@ export class SettingsCoordinator {
         return;
       }
       const nextEffort = clampEffortToModel(selected, settings?.reasoningEffort ?? null);
-      this.host.store.setChatSettings(scopeId, selected.model, nextEffort.effort);
+      const nextVariant = clampVariantToModel(selected, settings?.modelVariant ?? null, nextEffort.effort);
+      this.host.store.setChatSettings(scopeId, selected.model, nextEffort.effort, undefined, nextVariant.variant);
       await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'callback_model', {
         model: formatModelDisplayName(selected.model) ?? selected.model,
@@ -386,6 +402,30 @@ export class SettingsCoordinator {
         : t(locale, 'callback_service_tier', { value: formatServiceTierLabel(locale, nextTier) }));
       return;
     }
+    if (kind === 'variant') {
+      const currentModel = resolveCurrentModel(models, settings?.model ?? null);
+      if (!currentModel || (currentModel.supportedVariants ?? []).length === 0) {
+        await this.host.answerCallback(event.callbackQueryId, t(locale, 'variant_not_supported_by_model'));
+        return;
+      }
+      if (value === 'default') {
+        const nextEffort = currentModel.supportedVariants?.length ? null : settings?.reasoningEffort ?? null;
+        this.host.store.setChatSettings(scopeId, settings?.model ?? null, nextEffort, undefined, null);
+        await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
+        await this.host.answerCallback(event.callbackQueryId, t(locale, 'using_default_variant'));
+        return;
+      }
+      const variant = normalizeRequestedModelVariant(decodeURIComponent(value));
+      if (!variant || !(currentModel.supportedVariants ?? []).includes(variant)) {
+        await this.host.answerCallback(event.callbackQueryId, t(locale, 'variant_no_longer_available'));
+        return;
+      }
+      const mappedEffort = currentModel.variantReasoningEfforts?.[variant] ?? null;
+      this.host.store.setChatSettings(scopeId, settings?.model ?? null, mappedEffort, undefined, variant);
+      await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
+      await this.host.answerCallback(event.callbackQueryId, t(locale, 'callback_variant', { value: variant }));
+      return;
+    }
     if (value === 'default') {
       this.host.store.setChatSettings(scopeId, settings?.model ?? null, null);
       await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
@@ -402,7 +442,8 @@ export class SettingsCoordinator {
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'effort_not_supported_by_model'));
       return;
     }
-    this.host.store.setChatSettings(scopeId, settings?.model ?? null, effort);
+    const nextVariant = clampVariantToModel(currentModel, effort, effort);
+    this.host.store.setChatSettings(scopeId, settings?.model ?? null, effort, undefined, nextVariant.variant);
     await this.refreshModelSettingsPanel(scopeId, event.messageId, locale, models);
     await this.host.answerCallback(event.callbackQueryId, t(locale, 'callback_effort', { effort }));
   }

@@ -50,6 +50,7 @@ export class ServiceControlCoordinator {
         }
       }
       let rateLimits: AccountRateLimitSnapshot | null = null;
+      const supportsRateLimits = typeof this.host.app.readAccountRateLimits === 'function';
       if (typeof this.host.app.readAccountRateLimits === 'function') {
         try {
           rateLimits = await this.host.app.readAccountRateLimits();
@@ -65,7 +66,9 @@ export class ServiceControlCoordinator {
         ...(accountIdentity
           ? [t(locale, 'status_account_identity', { value: formatAccountIdentityLabel(accountIdentity) })]
           : []),
-        ...(rateLimits ? formatRateLimitStatusLines(locale, rateLimits) : [t(locale, 'reconnect_rate_limits_unavailable')]),
+        ...(supportsRateLimits
+          ? (rateLimits ? formatRateLimitStatusLines(locale, rateLimits) : [t(locale, 'reconnect_rate_limits_unavailable')])
+          : []),
       ];
       await this.host.messages.sendMessage(scopeId, lines.join('\n'));
     } catch (error) {
@@ -108,7 +111,7 @@ export class ServiceControlCoordinator {
   }
 
   private async ensureMaintenanceAllowed(scopeId: string, locale: AppLocale): Promise<boolean> {
-    if (this.host.activeTurnCount() > 0) {
+    if (this.host.activeTurnCount() > 0 && this.host.app.isConnected()) {
       await this.host.messages.sendMessage(scopeId, t(locale, 'maintenance_active_turn_blocked'));
       return false;
     }

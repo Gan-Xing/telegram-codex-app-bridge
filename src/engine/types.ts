@@ -62,6 +62,7 @@ export interface StartTurnOptions {
   model: string | null;
   serviceTier: ServiceTierValue | null;
   effort: ReasoningEffortValue | null;
+  modelVariant?: string | null;
   collaborationMode: CollaborationModeValue | null;
   geminiApprovalMode?: GeminiApprovalModeValue | null;
   developerInstructions: string | null;

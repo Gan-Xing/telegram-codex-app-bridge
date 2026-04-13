@@ -92,6 +92,7 @@ export class ThreadSessionService {
         model: turnConfig.model,
         serviceTier: turnConfig.serviceTier,
         effort: turnConfig.effort,
+        modelVariant: turnConfig.modelVariant,
         collaborationMode: turnConfig.collaborationMode,
         geminiApprovalMode: turnConfig.geminiApprovalMode,
         developerInstructions: options.developerInstructions ?? null,
@@ -125,6 +126,7 @@ export class ThreadSessionService {
         model: nextTurnConfig.model,
         serviceTier: nextTurnConfig.serviceTier,
         effort: nextTurnConfig.effort,
+        modelVariant: nextTurnConfig.modelVariant,
         collaborationMode: nextTurnConfig.collaborationMode,
         geminiApprovalMode: nextTurnConfig.geminiApprovalMode,
         developerInstructions: options.developerInstructions ?? null,
@@ -285,6 +287,8 @@ export class ThreadSessionService {
           : params.reasoning_effort === null
             ? null
             : String(params.reasoning_effort) as ReasoningEffortValue,
+      undefined,
+      current?.modelVariant ?? null,
     );
     this.host.store.setChatServiceTier(
       scopeId,
@@ -308,6 +312,7 @@ export class ThreadSessionService {
     const effort = syncMode === 'seed'
       ? hasExisting ? existing.reasoningEffort : session.reasoningEffort
       : session.reasoningEffort;
+    const modelVariant = existing?.modelVariant ?? session.modelVariant ?? null;
     const serviceTier = syncMode === 'seed'
       ? hasExisting ? existing.serviceTier : session.serviceTier
       : session.serviceTier;
@@ -318,7 +323,7 @@ export class ThreadSessionService {
       updatedAt: Date.now(),
     };
     this.host.store.setBinding(scopeId, normalized.threadId, normalized.cwd);
-    this.host.store.setChatSettings(scopeId, model, effort);
+    this.host.store.setChatSettings(scopeId, model, effort, undefined, modelVariant);
     this.host.store.setChatServiceTier(scopeId, serviceTier);
     this.host.attachedThreads.add(normalized.threadId);
     this.host.updateStatus();
@@ -334,6 +339,7 @@ export class ThreadSessionService {
     model: string | null;
     serviceTier: ServiceTierValue | null;
     effort: ReasoningEffortValue | null;
+    modelVariant: string | null;
     collaborationMode: CollaborationModeValue | null;
     geminiApprovalMode: GeminiApprovalModeValue | null;
   }> {
@@ -341,6 +347,7 @@ export class ThreadSessionService {
     const capabilities = this.capabilities;
     const serviceTier = capabilities.serviceTier ? (settings?.serviceTier ?? null) : null;
     const effort = capabilities.reasoningEffort ? (settings?.reasoningEffort ?? null) : null;
+    const modelVariant = settings?.modelVariant ?? null;
     const collaborationMode = capabilities.guidedPlan === 'none'
       ? null
       : collaborationModeOverride === undefined
@@ -355,7 +362,7 @@ export class ThreadSessionService {
       const models = await this.host.app.listModels();
       model = resolveCurrentModel(models, null)?.model ?? null;
     }
-    return { model, serviceTier, effort, collaborationMode, geminiApprovalMode };
+    return { model, serviceTier, effort, modelVariant, collaborationMode, geminiApprovalMode };
   }
 
   private async stageAttachments(

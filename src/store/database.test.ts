@@ -218,6 +218,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: 'o3',
       reasoningEffort: 'high',
+      modelVariant: null,
       serviceTier: null,
       locale: null,
       accessPreset: null,
@@ -234,6 +235,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: null,
       reasoningEffort: 'medium',
+      modelVariant: null,
       serviceTier: null,
       locale: null,
       accessPreset: null,
@@ -250,6 +252,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: null,
       reasoningEffort: 'medium',
+      modelVariant: null,
       serviceTier: null,
       locale: 'zh',
       accessPreset: null,
@@ -266,6 +269,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: null,
       reasoningEffort: 'medium',
+      modelVariant: null,
       serviceTier: null,
       locale: 'zh',
       accessPreset: 'full-access',
@@ -282,6 +286,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: null,
       reasoningEffort: 'medium',
+      modelVariant: null,
       serviceTier: null,
       locale: 'zh',
       accessPreset: 'full-access',
@@ -298,6 +303,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: null,
       reasoningEffort: 'medium',
+      modelVariant: null,
       serviceTier: 'fast',
       locale: 'zh',
       accessPreset: 'full-access',
@@ -320,6 +326,7 @@ test('BridgeStore persists chat session settings', () => {
       chatId: 'chat-3',
       model: null,
       reasoningEffort: 'medium',
+      modelVariant: null,
       serviceTier: 'fast',
       locale: 'zh',
       accessPreset: 'full-access',
@@ -331,11 +338,15 @@ test('BridgeStore persists chat session settings', () => {
       updatedAt: store.getChatSettings('chat-3')!.updatedAt,
     });
 
+    store.setChatModelVariant('chat-3', 'high');
+    assert.equal(store.getChatSettings('chat-3')?.modelVariant, 'high');
+
     store.setChatSettings('chat-3', 'o3', 'low');
     assert.deepEqual(store.getChatSettings('chat-3'), {
       chatId: 'chat-3',
       model: 'o3',
       reasoningEffort: 'low',
+      modelVariant: 'high',
       serviceTier: 'fast',
       locale: 'zh',
       accessPreset: 'full-access',

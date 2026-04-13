@@ -46,6 +46,7 @@ export interface ChatSessionSettings extends GuidedPlanPreferences {
   chatId: string;
   model: string | null;
   reasoningEffort: ReasoningEffortValue | null;
+  modelVariant?: string | null;
   serviceTier: ServiceTierValue | null;
   locale: AppLocale | null;
   accessPreset: AccessPresetValue | null;
@@ -98,6 +99,7 @@ export interface ThreadSessionState {
   model: string;
   modelProvider: string;
   reasoningEffort: ReasoningEffortValue | null;
+  modelVariant?: string | null;
   serviceTier: ServiceTierValue | null;
   cwd: string;
 }
@@ -110,6 +112,8 @@ export interface ModelInfo {
   isDefault: boolean;
   supportedReasoningEfforts: ReasoningEffortValue[];
   defaultReasoningEffort: ReasoningEffortValue;
+  supportedVariants?: string[];
+  variantReasoningEfforts?: Record<string, ReasoningEffortValue | null>;
 }
 
 export type ApprovalKind = 'command' | 'fileChange';

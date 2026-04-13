@@ -61,6 +61,9 @@ export class StatusCommandCoordinator {
       capabilities.reasoningEffort
         ? t(locale, 'status_configured_effort', { value: settings?.reasoningEffort ?? t(locale, 'server_default') })
         : null,
+      settings?.modelVariant
+        ? t(locale, 'status_configured_variant', { value: settings.modelVariant })
+        : null,
       capabilities.serviceTier
         ? t(locale, 'status_configured_service_tier', { value: formatServiceTierLabel(locale, settings?.serviceTier ?? null) })
         : null,

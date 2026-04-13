@@ -21,6 +21,7 @@ import {
   type OpenCodePermissionRule,
   type OpenCodePermissionRequest,
   type OpenCodeProviderCatalog,
+  type OpenCodeProviderModel,
   type OpenCodeQuestionRequest,
   type OpenCodeSession,
   type OpenCodeSessionStatus,
@@ -40,6 +41,7 @@ import type {
   TurnStartResult,
   TurnSteerResult,
 } from './types.js';
+import type { ReasoningEffortValue } from '../types.js';
 
 interface OpenCodeSessionRecord {
   session: OpenCodeSession;
@@ -93,9 +95,9 @@ export class OpenCodeEngineProvider extends EventEmitter implements EngineProvid
     approvals: 'limited',
     steerActiveTurn: false,
     rateLimits: false,
-    reasoningEffort: false,
+    reasoningEffort: true,
     serviceTier: false,
-    reconnect: false,
+    reconnect: true,
   } as const;
 
   private readonly client: OpenCodeClient;
@@ -239,7 +241,7 @@ export class OpenCodeEngineProvider extends EventEmitter implements EngineProvid
       itemId,
       reasoningItemId,
       cwd,
-      model: options.model ?? this.config.opencodeDefaultModel ?? null,
+      model: options.model ?? this.config.opencodeDefaultModel ?? this.resolveDefaultModel(),
       assistantStarted: false,
       reasoningCompleted: false,
       completed: false,
@@ -269,13 +271,24 @@ export class OpenCodeEngineProvider extends EventEmitter implements EngineProvid
       model?: { providerID: string; modelID: string };
       agent?: string;
       system?: string | null;
+      variant?: string | null;
       parts: Array<Record<string, unknown>>;
     } = {
       parts: buildOpenCodePromptParts(options.input),
     };
-    const parsedModel = parseOpenCodeModel(options.model ?? this.config.opencodeDefaultModel ?? null);
+    const selectedModel = options.model ?? this.config.opencodeDefaultModel ?? null;
+    const parsedModel = parseOpenCodeModel(selectedModel);
     if (parsedModel) {
       promptBody.model = parsedModel;
+    }
+    const variant = resolveOpenCodeVariant(
+      selectedModel ?? this.resolveDefaultModel(),
+      options.modelVariant ?? null,
+      options.effort ?? null,
+      this.modelsCache,
+    );
+    if (variant) {
+      promptBody.variant = variant;
     }
     const agent = resolveOpenCodeAgent(this.config.opencodeDefaultAgent ?? null, options.collaborationMode);
     if (agent) {
@@ -347,8 +360,10 @@ export class OpenCodeEngineProvider extends EventEmitter implements EngineProvid
         displayName: `${provider.name}: ${model.name}`,
         description: 'OpenCode provider model',
         isDefault: defaultMap[provider.id] === model.id,
-        supportedReasoningEfforts: [],
-        defaultReasoningEffort: 'none' as const,
+        supportedReasoningEfforts: listOpenCodeReasoningEfforts(model),
+        defaultReasoningEffort: resolveDefaultOpenCodeReasoningEffort(listOpenCodeReasoningEfforts(model)),
+        supportedVariants: listOpenCodeVariants(model),
+        variantReasoningEfforts: listOpenCodeVariantReasoningEfforts(model),
       })))
       .sort((left, right) => Number(right.isDefault) - Number(left.isDefault) || left.model.localeCompare(right.model));
   }
@@ -863,6 +878,7 @@ export class OpenCodeEngineProvider extends EventEmitter implements EngineProvid
       model: model ?? '',
       modelProvider: record.modelProvider ?? 'opencode',
       reasoningEffort: null,
+      modelVariant: null,
       serviceTier: null,
       cwd: record.session.directory,
     };
@@ -1097,6 +1113,110 @@ function parseOpenCodeModel(value: string | null): { providerID: string; modelID
     return null;
   }
   return { providerID, modelID };
+}
+
+const OPENCODE_REASONING_EFFORT_ORDER: ReasoningEffortValue[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const OPENCODE_REASONING_EFFORT_DEFAULT_PRIORITY: ReasoningEffortValue[] = ['medium', 'high', 'low', 'minimal', 'xhigh', 'none'];
+
+function isReasoningEffortValue(value: string): value is ReasoningEffortValue {
+  return OPENCODE_REASONING_EFFORT_ORDER.includes(value as ReasoningEffortValue);
+}
+
+function listOpenCodeReasoningEfforts(model: OpenCodeProviderModel): ReasoningEffortValue[] {
+  const variantKeys = listOpenCodeVariants(model);
+  return variantKeys
+    .filter(isReasoningEffortValue)
+    .sort((left, right) => OPENCODE_REASONING_EFFORT_ORDER.indexOf(left) - OPENCODE_REASONING_EFFORT_ORDER.indexOf(right));
+}
+
+function listOpenCodeVariants(model: OpenCodeProviderModel): string[] {
+  return Object.keys(model.variants ?? {}).sort((left, right) => {
+    const leftPriority = OPENCODE_REASONING_EFFORT_ORDER.indexOf(left as ReasoningEffortValue);
+    const rightPriority = OPENCODE_REASONING_EFFORT_ORDER.indexOf(right as ReasoningEffortValue);
+    if (leftPriority >= 0 && rightPriority >= 0) {
+      return leftPriority - rightPriority;
+    }
+    if (leftPriority >= 0) {
+      return -1;
+    }
+    if (rightPriority >= 0) {
+      return 1;
+    }
+    return left.localeCompare(right);
+  });
+}
+
+function resolveDefaultOpenCodeReasoningEffort(supported: ReasoningEffortValue[]): ReasoningEffortValue {
+  for (const effort of OPENCODE_REASONING_EFFORT_DEFAULT_PRIORITY) {
+    if (supported.includes(effort)) {
+      return effort;
+    }
+  }
+  return 'none';
+}
+
+function resolveOpenCodeVariant(
+  modelRef: string | null,
+  modelVariant: string | null,
+  effort: ReasoningEffortValue | null,
+  catalog: OpenCodeProviderCatalog | null,
+): string | null {
+  if (modelVariant) {
+    if (!catalog || !modelRef) {
+      return modelVariant;
+    }
+    const parsed = parseOpenCodeModel(modelRef);
+    if (!parsed) {
+      return modelVariant;
+    }
+    const provider = catalog.providers.find((entry) => entry.id === parsed.providerID);
+    const model = provider?.models[parsed.modelID];
+    if (!model) {
+      return modelVariant;
+    }
+    return model.variants?.[modelVariant] ? modelVariant : null;
+  }
+  if (!effort) {
+    return null;
+  }
+  if (!catalog || !modelRef) {
+    return effort;
+  }
+  const parsed = parseOpenCodeModel(modelRef);
+  if (!parsed) {
+    return effort;
+  }
+  const provider = catalog.providers.find((entry) => entry.id === parsed.providerID);
+  const model = provider?.models[parsed.modelID];
+  if (!model) {
+    return effort;
+  }
+  return model.variants?.[effort] ? effort : null;
+}
+
+function listOpenCodeVariantReasoningEfforts(model: OpenCodeProviderModel): Record<string, ReasoningEffortValue | null> {
+  const entries = listOpenCodeVariants(model)
+    .map((variant) => [variant, resolveOpenCodeVariantReasoningEffort(model, variant)] as const)
+    .filter((entry): entry is readonly [string, ReasoningEffortValue | null] => entry[1] !== undefined);
+  return Object.fromEntries(entries);
+}
+
+function resolveOpenCodeVariantReasoningEffort(
+  model: OpenCodeProviderModel,
+  variant: string,
+): ReasoningEffortValue | null | undefined {
+  if (isReasoningEffortValue(variant)) {
+    return variant;
+  }
+  const config = model.variants?.[variant];
+  if (!config || typeof config !== 'object') {
+    return undefined;
+  }
+  const explicit = typeof config.reasoningEffort === 'string' ? config.reasoningEffort : null;
+  if (explicit && isReasoningEffortValue(explicit)) {
+    return explicit;
+  }
+  return null;
 }
 
 function buildAssistantPreview(active: OpenCodeActiveTurn): string {

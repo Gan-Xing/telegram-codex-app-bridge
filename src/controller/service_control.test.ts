@@ -94,7 +94,7 @@ function makeHost(overrides: Record<string, unknown> = {}) {
   return host;
 }
 
-test('reconnect refreshes the codex session and reports rate limits', async () => {
+test('reconnect refreshes the session and reports rate limits', async () => {
   const host = makeHost();
   const service = new ServiceControlCoordinator(host as any);
 
@@ -104,7 +104,7 @@ test('reconnect refreshes the codex session and reports rate limits', async () =
   assert.equal(host.app.startCalls, 1);
   assert.equal(host.runtimeStatus.cleared, 1);
   assert.equal(host.sentMessages.length, 2);
-  assert.match(host.sentMessages[1]?.text ?? '', /Codex 会话已刷新/);
+  assert.match(host.sentMessages[1]?.text ?? '', /当前会话已刷新/);
   assert.match(host.sentMessages[1]?.text ?? '', /账号：ganxingus@gmail.com \(chatgpt, id:f2275ca4\)/);
   assert.match(host.sentMessages[1]?.text ?? '', /5小时额度：已用 11%/);
   assert.match(host.sentMessages[1]?.text ?? '', /本周额度：已用 54%/);
@@ -125,6 +125,37 @@ test('maintenance commands are blocked while any active turn is running', async 
   assert.equal(host.spawnRestartScriptCalls.length, 0);
   assert.equal(host.sentMessages.length, 2);
   assert.match(host.sentMessages[0]?.text ?? '', /先等当前回复结束/);
+});
+
+test('maintenance commands are allowed when the engine is disconnected even if a stale turn remains', async () => {
+  let connected = false;
+  let stopCalls = 0;
+  let startCalls = 0;
+  const host = makeHost({
+    activeTurnCount() {
+      return 1;
+    },
+    app: {
+      async stop() {
+        stopCalls += 1;
+        connected = false;
+      },
+      async start() {
+        startCalls += 1;
+        connected = true;
+      },
+      isConnected() {
+        return connected;
+      },
+    },
+  });
+  const service = new ServiceControlCoordinator(host as any);
+
+  await service.reconnect('chat-1', 'zh');
+
+  assert.equal(stopCalls, 1);
+  assert.equal(startCalls, 1);
+  assert.equal(host.sentMessages[0]?.text ?? '', '正在刷新当前会话...');
 });
 
 test('restart queues the safe restart script for the current scope', async () => {
