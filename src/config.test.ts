@@ -144,6 +144,7 @@ test('loadConfig reads Codex model catalog from a JSON file', () => {
     'TG_ALLOWED_USER_ID=1',
     'BRIDGE_ENGINE=codex',
     `CODEX_MODEL_CATALOG_PATH=${catalogPath}`,
+    'CODEX_DEFAULT_PROVIDER_PROFILE_ID=cliproxyminimax',
   ].join('\n'), 'utf8');
 
   withPatchedEnv({
@@ -152,11 +153,87 @@ test('loadConfig reads Codex model catalog from a JSON file', () => {
     TG_ALLOWED_USER_ID: undefined,
     BRIDGE_ENGINE: undefined,
     CODEX_MODEL_CATALOG_PATH: undefined,
+    CODEX_DEFAULT_PROVIDER_PROFILE_ID: undefined,
   }, () => {
     const config = loadConfig();
     assert.equal(config.codexModelCatalogPath, catalogPath);
     assert.ok(config.codexModelCatalog);
     assert.deepEqual(config.codexModelCatalog.map((model) => model.model), ['MiniMax-M2.7']);
     assert.equal(config.codexModelCatalog[0]?.isDefault, true);
+  });
+});
+
+test('loadConfig keeps OpenAI as the default Codex provider profile when a proxy provider is configured', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-default-provider-test-'));
+  const envFile = path.join(tempDir, '.env.codex');
+  const catalogPath = path.join(tempDir, 'catalog.json');
+  fs.writeFileSync(catalogPath, JSON.stringify([
+    {
+      model: 'MiniMax-M2.7',
+      displayName: 'MiniMax-M2.7',
+      isDefault: true,
+    },
+  ]), 'utf8');
+  fs.writeFileSync(envFile, [
+    'TG_BOT_TOKEN=test-token',
+    'TG_ALLOWED_USER_ID=1',
+    'BRIDGE_ENGINE=codex',
+    `CODEX_MODEL_CATALOG_PATH=${catalogPath}`,
+    'CODEX_PROVIDER_ID=cliproxyminimax',
+    'CODEX_PROVIDER_DEFAULT_MODEL=MiniMax-M2.7',
+  ].join('\n'), 'utf8');
+
+  withPatchedEnv({
+    ENV_FILE: envFile,
+    TG_BOT_TOKEN: undefined,
+    TG_ALLOWED_USER_ID: undefined,
+    BRIDGE_ENGINE: undefined,
+    CODEX_MODEL_CATALOG_PATH: undefined,
+    CODEX_PROVIDER_ID: undefined,
+    CODEX_PROVIDER_DEFAULT_MODEL: undefined,
+    CODEX_DEFAULT_PROVIDER_PROFILE_ID: undefined,
+  }, () => {
+    const config = loadConfig();
+    assert.equal(config.codexDefaultProviderProfileId, 'openai-native');
+    assert.equal(config.codexProviderProfiles[0]?.id, 'openai-native');
+    assert.equal(config.codexProviderProfiles[1]?.id, 'cliproxyminimax');
+  });
+});
+
+test('loadConfig allows overriding the default Codex provider profile explicitly', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telegram-codex-explicit-provider-test-'));
+  const envFile = path.join(tempDir, '.env.codex');
+  const catalogPath = path.join(tempDir, 'catalog.json');
+  fs.writeFileSync(catalogPath, JSON.stringify([
+    {
+      model: 'MiniMax-M2.7',
+      displayName: 'MiniMax-M2.7',
+      isDefault: true,
+    },
+  ]), 'utf8');
+  fs.writeFileSync(envFile, [
+    'TG_BOT_TOKEN=test-token',
+    'TG_ALLOWED_USER_ID=1',
+    'BRIDGE_ENGINE=codex',
+    `CODEX_MODEL_CATALOG_PATH=${catalogPath}`,
+    'CODEX_PROVIDER_ID=cliproxyminimax',
+    'CODEX_PROVIDER_DEFAULT_MODEL=MiniMax-M2.7',
+    'CODEX_DEFAULT_PROVIDER_PROFILE_ID=cliproxyminimax',
+  ].join('\n'), 'utf8');
+
+  withPatchedEnv({
+    ENV_FILE: envFile,
+    TG_BOT_TOKEN: undefined,
+    TG_ALLOWED_USER_ID: undefined,
+    BRIDGE_ENGINE: undefined,
+    CODEX_MODEL_CATALOG_PATH: undefined,
+    CODEX_PROVIDER_ID: undefined,
+    CODEX_PROVIDER_DEFAULT_MODEL: undefined,
+    CODEX_DEFAULT_PROVIDER_PROFILE_ID: undefined,
+  }, () => {
+    const config = loadConfig();
+    assert.equal(config.codexDefaultProviderProfileId, 'cliproxyminimax');
+    assert.equal(config.codexProviderProfiles[0]?.id, 'cliproxyminimax');
+    assert.equal(config.codexProviderProfiles[1]?.id, 'openai-native');
   });
 });

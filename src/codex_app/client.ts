@@ -148,7 +148,7 @@ export class CodexAppClient extends EventEmitter {
       limit: options.limit,
       sortKey: 'updated_at',
       searchTerm: options.searchTerm ?? null,
-      archived: false,
+      archived: options.archived ?? false,
     });
     const rows = Array.isArray((result as any).data) ? (result as any).data : [];
     return rows.map(mapThread);
@@ -168,6 +168,14 @@ export class CodexAppClient extends EventEmitter {
 
   async renameThread(threadId: string, name: string): Promise<void> {
     await this.request('thread/name/set', { threadId, name });
+  }
+
+  async archiveThread(threadId: string): Promise<void> {
+    await this.request('thread/archive', { threadId });
+  }
+
+  async unarchiveThread(threadId: string): Promise<void> {
+    await this.request('thread/unarchive', { threadId });
   }
 
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {
@@ -221,16 +229,7 @@ export class CodexAppClient extends EventEmitter {
       summary: null,
       personality: null,
       outputSchema: null,
-      collaborationMode: options.collaborationMode === 'plan'
-        ? {
-            mode: 'plan',
-            settings: {
-              model: options.model,
-              reasoning_effort: options.effort,
-              developer_instructions: options.developerInstructions ?? PLAN_MODE_DEVELOPER_INSTRUCTIONS,
-            },
-          }
-        : null,
+      collaborationMode: serializeCollaborationMode(options),
     });
     return (result as any).turn;
   }
@@ -669,6 +668,30 @@ function mapSandboxPolicy(mode: SandboxModeValue): { type: 'readOnly' | 'workspa
     return { type: 'dangerFullAccess' };
   }
   return { type: 'workspaceWrite' };
+}
+
+function serializeCollaborationMode(options: StartTurnOptions): Record<string, unknown> | null {
+  if (options.collaborationMode === 'plan') {
+    return {
+      mode: 'plan',
+      settings: {
+        model: options.model,
+        reasoning_effort: options.effort,
+        developer_instructions: options.developerInstructions ?? PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+      },
+    };
+  }
+  if (options.collaborationMode === 'default') {
+    return {
+      mode: 'default',
+      settings: {
+        model: options.model,
+        reasoning_effort: options.effort,
+        developer_instructions: options.developerInstructions ?? '',
+      },
+    };
+  }
+  return null;
 }
 
 function mapAccountRateLimitResponse(raw: any): AccountRateLimitSnapshot | null {

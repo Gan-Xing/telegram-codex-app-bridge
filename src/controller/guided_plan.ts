@@ -26,6 +26,8 @@ export interface GuidedPlanTurnState {
   threadId: string;
   turnId: string;
   interruptRequested: boolean;
+  buffer?: string;
+  finalText?: string | null;
   planMessageId: number | null;
   planText: string | null;
   planExplanation: string | null;
@@ -591,7 +593,22 @@ export class GuidedPlanCoordinator {
       this.host.updateStatus();
       return;
     }
-    const nextSession = this.updateSession(session.sessionId, {
+    let reviewableSession = this.host.store.getPlanSession(session.sessionId) ?? session;
+    if (!canConfirmPlanSession(reviewableSession)) {
+      await this.materializeFallbackPlanMessage(active, reviewableSession);
+      reviewableSession = this.host.store.getPlanSession(session.sessionId) ?? reviewableSession;
+    }
+    if (!canConfirmPlanSession(reviewableSession)) {
+      this.updateSession(session.sessionId, {
+        state: 'cancelled',
+        currentPromptId: null,
+        resolvedAt: Date.now(),
+      });
+      await this.host.sendMessage(active.scopeId, t(this.host.localeForChat(active.scopeId), 'plan_draft_no_reviewable_plan'));
+      this.host.updateStatus();
+      return;
+    }
+    const nextSession = this.updateSession(reviewableSession.sessionId, {
       threadId: active.threadId,
       sourceTurnId: active.turnId,
       executionTurnId: null,
@@ -611,6 +628,26 @@ export class GuidedPlanCoordinator {
       lastPromptMessageId: promptMessageId,
     });
     this.host.updateStatus();
+  }
+
+  private async materializeFallbackPlanMessage(
+    active: GuidedPlanTurnState,
+    session: GuidedPlanSession,
+  ): Promise<void> {
+    const fallbackDraftText = active.planDraftText?.trim()
+      || active.finalText?.trim()
+      || active.buffer?.trim()
+      || null;
+    if (!fallbackDraftText) {
+      return;
+    }
+    active.planDraftText = fallbackDraftText;
+    await this.renderPlanCard(active);
+    if (!session.lastPlanMessageId && active.planMessageId !== null) {
+      this.updateSession(session.sessionId, {
+        lastPlanMessageId: active.planMessageId,
+      });
+    }
   }
 
   private async upsertPlanConfirmationPrompt(

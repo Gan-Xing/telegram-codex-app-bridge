@@ -206,6 +206,14 @@ export class ClaudeEngineProvider extends EventEmitter implements EngineProvider
     return Promise.resolve();
   }
 
+  async archiveThread(_threadId: string, _scopeId?: string | null): Promise<void> {
+    throw unsupportedProviderFeature('claude', 'archiveThread', 'Archive is not supported by Claude CLI instances');
+  }
+
+  async unarchiveThread(_threadId: string, _scopeId?: string | null): Promise<void> {
+    throw unsupportedProviderFeature('claude', 'unarchiveThread', 'Unarchive is not supported by Claude CLI instances');
+  }
+
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {
     const session = this.createLocalSession({
       cwd: options.cwd ?? this.config.defaultCwd,

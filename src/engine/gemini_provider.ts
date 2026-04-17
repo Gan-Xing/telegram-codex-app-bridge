@@ -184,6 +184,14 @@ export class GeminiEngineProvider extends EventEmitter implements EngineProvider
     return Promise.resolve();
   }
 
+  async archiveThread(_threadId: string, _scopeId?: string | null): Promise<void> {
+    throw unsupportedProviderFeature('gemini', 'archiveThread', 'Archive is not supported by Gemini CLI instances');
+  }
+
+  async unarchiveThread(_threadId: string, _scopeId?: string | null): Promise<void> {
+    throw unsupportedProviderFeature('gemini', 'unarchiveThread', 'Unarchive is not supported by Gemini CLI instances');
+  }
+
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {
     const session = this.createLocalSession({
       cwd: options.cwd ?? this.config.defaultCwd,

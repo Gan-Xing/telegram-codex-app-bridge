@@ -27,6 +27,7 @@ export interface ListThreadsOptions {
   limit: number;
   searchTerm?: string | null;
   scopeId?: string | null;
+  archived?: boolean | null;
 }
 
 export interface StartThreadOptions {
@@ -144,6 +145,8 @@ export interface EngineProvider {
   readThread(threadId: string, includeTurns?: boolean, scopeId?: string | null): Promise<AppThread | null>;
   readThreadWithTurns(threadId: string, scopeId?: string | null): Promise<AppThreadWithTurns | null>;
   renameThread(threadId: string, name: string, scopeId?: string | null): Promise<void>;
+  archiveThread(threadId: string, scopeId?: string | null): Promise<void>;
+  unarchiveThread(threadId: string, scopeId?: string | null): Promise<void>;
 
   startThread(options: StartThreadOptions): Promise<ThreadSessionState>;
   resumeThread(options: ResumeThreadOptions): Promise<ThreadSessionState>;

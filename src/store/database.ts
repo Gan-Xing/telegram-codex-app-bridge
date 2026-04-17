@@ -86,6 +86,10 @@ export class BridgeStore {
     this.chatState.setBinding(chatId, threadId, cwd);
   }
 
+  clearBinding(chatId: string): void {
+    this.chatState.clearBinding(chatId);
+  }
+
   getChatSettings(chatId: string): ChatSessionSettings | null {
     return this.chatState.getChatSettings(chatId);
   }

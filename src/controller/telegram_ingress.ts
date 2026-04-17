@@ -64,7 +64,10 @@ export class TelegramIngressRouter {
       help: (event, locale) => this.showHelp(event.scopeId, locale),
       status: (event, locale) => this.host.statusCommand.showStatus(event.scopeId, locale),
       where: (event, locale) => this.host.settings.showWherePanel(event.scopeId, undefined, locale),
-      threads: (event, locale, args) => this.host.threadPanels.showThreadsPanel(event.scopeId, undefined, args.join(' ').trim() || null, locale),
+      threads: (event, locale, args) => {
+        const query = parseThreadsCommandArgs(args);
+        return this.host.threadPanels.showThreadsPanel(event.scopeId, undefined, query.searchTerm, locale, { archived: query.archived });
+      },
       open: (event, locale, args) => this.handleOpenCommand(event.scopeId, locale, args),
       new: (event, locale, args) => this.handleNewCommand(event.scopeId, locale, args),
       provider: (event, locale, args) => this.host.settings.handleProviderCommand(event, locale, args),
@@ -109,6 +112,24 @@ export class TelegramIngressRouter {
         handle: (event, match, locale) => this.host.threadPanels.handleThreadListNavigationCallback(
           event,
           match[1]! as 'prev' | 'next' | 'clear',
+          locale,
+        ),
+      },
+      {
+        pattern: /^thread:list:view:(active|archived)$/,
+        handle: (event, match, locale) => this.host.threadPanels.handleThreadListNavigationCallback(
+          event,
+          match[1]! as 'active' | 'archived',
+          locale,
+        ),
+      },
+      {
+        pattern: /^thread:(archive|unarchive):(start|confirm|cancel):(.+)$/,
+        handle: (event, match, locale) => this.host.threadPanels.handleThreadArchiveCallback(
+          event,
+          match[1]! as 'archive' | 'unarchive',
+          match[2]! as 'start' | 'confirm' | 'cancel',
+          match[3]!,
           locale,
         ),
       },
@@ -454,4 +475,18 @@ export class TelegramIngressRouter {
       serviceTier: resolveCodexProfileServiceTierSupport(profile, capabilities.serviceTier),
     };
   }
+}
+
+function parseThreadsCommandArgs(args: string[]): { archived: boolean; searchTerm: string | null } {
+  const first = (args[0] ?? '').trim().toLowerCase();
+  if (first === 'archived') {
+    const search = args.slice(1).join(' ').trim();
+    return { archived: true, searchTerm: search || null };
+  }
+  if (first === 'active') {
+    const search = args.slice(1).join(' ').trim();
+    return { archived: false, searchTerm: search || null };
+  }
+  const search = args.join(' ').trim();
+  return { archived: false, searchTerm: search || null };
 }

@@ -118,3 +118,41 @@ test('CodexAppClient serializes concurrent start requests for one profile runtim
   await Promise.all([first, second]);
   assert.equal(startServerCalls, 1);
 });
+
+test('CodexAppClient sends an explicit default collaboration mode payload', async () => {
+  const client = new CodexAppClient(
+    'codex',
+    '',
+    false,
+    new Logger('error', path.join(os.tmpdir(), 'telegram-codex-client-default-mode.test.log')),
+    process.platform,
+  ) as any;
+
+  let requestPayload: any = null;
+  client.request = async (_method: string, params: any) => {
+    requestPayload = params;
+    return { turn: { id: 'turn-1', status: 'running' } };
+  };
+
+  await client.startTurn({
+    threadId: 'thread-1',
+    input: [{ type: 'text', text: 'hello', text_elements: [] }],
+    approvalPolicy: 'on-request',
+    sandboxMode: 'workspace-write',
+    cwd: '/tmp/demo',
+    model: 'gpt-5.4',
+    serviceTier: null,
+    effort: 'medium',
+    collaborationMode: 'default',
+    developerInstructions: null,
+  });
+
+  assert.deepEqual(requestPayload?.collaborationMode, {
+    mode: 'default',
+    settings: {
+      model: 'gpt-5.4',
+      reasoning_effort: 'medium',
+      developer_instructions: '',
+    },
+  });
+});

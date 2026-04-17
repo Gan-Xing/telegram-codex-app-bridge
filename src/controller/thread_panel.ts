@@ -23,7 +23,9 @@ import {
 
 type InlineKeyboard = Array<Array<{ text: string; callback_data: string }>>;
 type ThreadRenameAction = 'start' | 'confirm' | 'cancel';
-type ThreadListNavigationAction = 'prev' | 'next' | 'clear';
+type ThreadArchiveMode = 'archive' | 'unarchive';
+type ThreadArchiveAction = 'start' | 'confirm' | 'cancel';
+type ThreadListNavigationAction = 'prev' | 'next' | 'clear' | 'active' | 'archived';
 
 interface ThreadRenameDraft {
   threadId: string;
@@ -33,16 +35,27 @@ interface ThreadRenameDraft {
   createdAt: number;
 }
 
+interface ThreadArchiveDraft {
+  threadId: string;
+  currentName: string;
+  mode: ThreadArchiveMode;
+  promptMessageId: number;
+  createdAt: number;
+}
+
 interface ThreadPanelHost {
   config: {
     threadListLimit: number;
     codexAppSyncOnOpen: boolean;
+    allowThreadArchive: boolean;
   };
   store: BridgeStore;
   logger: Logger;
-  app: Pick<EngineProvider, 'listThreads' | 'readThread' | 'readThreadWithTurns' | 'renameThread'>;
+  app: Pick<EngineProvider, 'listThreads' | 'readThread' | 'readThreadWithTurns' | 'renameThread' | 'archiveThread' | 'unarchiveThread'>;
   bindCachedThread: (scopeId: string, threadId: string) => Promise<ThreadBinding>;
   tryRevealThread: (scopeId: string, threadId: string, source: 'open') => Promise<string | null>;
+  clearBinding: (scopeId: string) => void;
+  getActiveTurnThreadId: (scopeId: string) => string | null;
   sendMessage: (scopeId: string, text: string, inlineKeyboard?: InlineKeyboard) => Promise<number>;
   sendHtmlMessage: (scopeId: string, text: string, inlineKeyboard?: InlineKeyboard) => Promise<number>;
   editMessage: (scopeId: string, messageId: number, text: string, inlineKeyboard?: InlineKeyboard) => Promise<void>;
@@ -54,12 +67,14 @@ const THREAD_HISTORY_PREVIEW_TURN_LIMIT = 3;
 
 export class ThreadPanelCoordinator {
   private readonly threadRenameDrafts = new Map<string, ThreadRenameDraft>();
+  private readonly threadArchiveDrafts = new Map<string, ThreadArchiveDraft>();
   private readonly threadListState = new Map<string, ThreadListPresentationState>();
 
   constructor(private readonly host: ThreadPanelHost) {}
 
   clearDrafts(): void {
     this.threadRenameDrafts.clear();
+    this.threadArchiveDrafts.clear();
     this.threadListState.clear();
   }
 
@@ -68,15 +83,17 @@ export class ThreadPanelCoordinator {
     messageId: number | undefined,
     searchTerm: string | null | undefined,
     locale: AppLocale,
-    options: { offset?: number } = {},
+    options: { offset?: number; archived?: boolean } = {},
   ): Promise<void> {
-    const binding = this.host.store.getBinding(scopeId);
+    const archived = Boolean(options.archived);
+    const binding = archived ? null : this.host.store.getBinding(scopeId);
     const pageSize = Math.max(1, this.host.config.threadListLimit);
     const offset = Math.max(0, options.offset ?? 0);
     const threads = await this.host.app.listThreads({
       limit: offset + pageSize + 1,
       searchTerm: searchTerm ?? null,
       scopeId,
+      archived,
     });
     const visibleThreads = threads.slice(offset, offset + pageSize);
     const hasNextPage = threads.length > offset + visibleThreads.length;
@@ -85,6 +102,7 @@ export class ThreadPanelCoordinator {
       pageSize,
       hasPreviousPage: offset > 0,
       hasNextPage,
+      archived,
       searchTerm: searchTerm ?? null,
     };
     this.threadListState.set(scopeId, presentationState);
@@ -99,8 +117,12 @@ export class ThreadPanelCoordinator {
       updatedAt: thread.updatedAt,
     }));
     this.host.store.cacheThreadList(scopeId, cached);
-    const text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null, presentationState);
-    const keyboard = buildThreadListKeyboard(locale, cached, presentationState);
+    const text = formatThreadsMessage(locale, cached, binding?.threadId ?? null, searchTerm ?? null, presentationState, {
+      allowThreadArchive: this.host.config.allowThreadArchive,
+    });
+    const keyboard = buildThreadListKeyboard(locale, cached, presentationState, {
+      allowThreadArchive: this.host.config.allowThreadArchive,
+    });
     if (messageId !== undefined) {
       await this.host.editHtmlMessage(scopeId, messageId, text, keyboard);
       return;
@@ -118,6 +140,7 @@ export class ThreadPanelCoordinator {
       pageSize: Math.max(1, this.host.config.threadListLimit),
       hasPreviousPage: false,
       hasNextPage: false,
+      archived: false,
       searchTerm: null,
     };
     const nextOffset = action === 'prev'
@@ -126,7 +149,8 @@ export class ThreadPanelCoordinator {
         ? state.offset + state.pageSize
         : 0;
     const nextSearchTerm = action === 'clear' ? null : (state.searchTerm ?? null);
-    await this.showThreadsPanel(event.scopeId, event.messageId, nextSearchTerm, locale, { offset: nextOffset });
+    const archived = action === 'archived' ? true : action === 'active' ? false : state.archived;
+    await this.showThreadsPanel(event.scopeId, event.messageId, nextSearchTerm, locale, { offset: nextOffset, archived });
     await this.host.answerCallback(event.callbackQueryId, t(locale, action === 'clear' ? 'threads_filter_cleared_short' : 'decision_recorded'));
   }
 
@@ -149,13 +173,18 @@ export class ThreadPanelCoordinator {
       await this.host.editHtmlMessage(
         scopeId,
         event.messageId,
-        formatThreadsMessage(locale, threads, binding.threadId, state?.searchTerm ?? null, state ?? undefined),
+        formatThreadsMessage(locale, threads, binding.threadId, state?.searchTerm ?? null, state ?? undefined, {
+          allowThreadArchive: this.host.config.allowThreadArchive,
+        }),
         buildThreadListKeyboard(locale, threads, state ?? {
           offset: 0,
           pageSize: threads.length,
           hasPreviousPage: false,
           hasNextPage: false,
+          archived: false,
           searchTerm: null,
+        }, {
+          allowThreadArchive: this.host.config.allowThreadArchive,
         }),
       );
     }
@@ -212,12 +241,77 @@ export class ThreadPanelCoordinator {
     this.host.store.setThreadNameOverride(scopeId, threadId, draft.proposedName);
     await this.resolveThreadRenameDraft(scopeId, draft, t(locale, 'thread_rename_updated', { value: draft.proposedName }));
     await this.host.answerCallback(event.callbackQueryId, t(locale, 'decision_recorded'));
-    try {
-      const state = this.threadListState.get(scopeId) ?? null;
-      await this.showThreadsPanel(scopeId, undefined, state?.searchTerm ?? null, locale, { offset: state?.offset ?? 0 });
-    } catch (error) {
-      this.host.logger.warn('thread.rename_refresh_failed', { scopeId, threadId, error: String(error) });
+    await this.refreshThreadsPanel(scopeId, locale);
+  }
+
+  async handleThreadArchiveCallback(
+    event: TelegramCallbackEvent,
+    mode: ThreadArchiveMode,
+    action: ThreadArchiveAction,
+    threadId: string,
+    locale: AppLocale,
+  ): Promise<void> {
+    const scopeId = event.scopeId;
+    if (action === 'start') {
+      if (mode === 'archive' && this.host.getActiveTurnThreadId(scopeId) === threadId) {
+        await this.host.answerCallback(event.callbackQueryId, t(locale, 'wait_current_turn'));
+        return;
+      }
+      const started = await this.startThreadArchiveDraft(scopeId, mode, threadId, locale);
+      await this.host.answerCallback(
+        event.callbackQueryId,
+        started
+          ? t(locale, mode === 'archive' ? 'thread_archive_started' : 'thread_unarchive_started')
+          : t(locale, 'thread_no_longer_available'),
+      );
+      return;
     }
+
+    const draft = this.threadArchiveDrafts.get(scopeId) ?? null;
+    if (!draft || draft.threadId !== threadId || draft.mode !== mode) {
+      await this.host.answerCallback(event.callbackQueryId, t(locale, 'thread_archive_missing'));
+      return;
+    }
+
+    if (action === 'cancel') {
+      await this.resolveThreadArchiveDraft(
+        scopeId,
+        draft,
+        t(locale, draft.mode === 'archive' ? 'thread_archive_cancelled' : 'thread_unarchive_cancelled'),
+      );
+      await this.host.answerCallback(
+        event.callbackQueryId,
+        t(locale, draft.mode === 'archive' ? 'thread_archive_cancelled' : 'thread_unarchive_cancelled'),
+      );
+      return;
+    }
+
+    const currentBinding = this.host.store.getBinding(scopeId);
+    try {
+      if (draft.mode === 'archive') {
+        await this.host.app.archiveThread(threadId, scopeId);
+        if (currentBinding?.threadId === threadId) {
+          this.host.clearBinding(scopeId);
+        }
+      } else {
+        await this.host.app.unarchiveThread(threadId, scopeId);
+      }
+    } catch (error) {
+      await this.host.answerCallback(
+        event.callbackQueryId,
+        t(locale, draft.mode === 'archive' ? 'thread_archive_sync_failed' : 'thread_unarchive_sync_failed', { error: formatUserError(error) }),
+      );
+      return;
+    }
+
+    const resolvedText = draft.mode === 'archive'
+      ? (currentBinding?.threadId === threadId
+          ? t(locale, 'thread_archived_current_cleared')
+          : t(locale, 'thread_archived'))
+      : t(locale, 'thread_unarchived');
+    await this.resolveThreadArchiveDraft(scopeId, draft, resolvedText);
+    await this.host.answerCallback(event.callbackQueryId, t(locale, 'decision_recorded'));
+    await this.refreshThreadsPanel(scopeId, locale);
   }
 
   async handleThreadRenameText(scopeId: string, text: string, locale: AppLocale): Promise<boolean> {
@@ -283,6 +377,18 @@ export class ThreadPanelCoordinator {
     }
   }
 
+  private async refreshThreadsPanel(scopeId: string, locale: AppLocale): Promise<void> {
+    try {
+      const state = this.threadListState.get(scopeId) ?? null;
+      await this.showThreadsPanel(scopeId, undefined, state?.searchTerm ?? null, locale, {
+        offset: state?.offset ?? 0,
+        archived: state?.archived ?? false,
+      });
+    } catch (error) {
+      this.host.logger.warn('thread.panel_refresh_failed', { scopeId, error: String(error) });
+    }
+  }
+
   private async startThreadRenameDraft(scopeId: string, threadId: string, locale: AppLocale): Promise<boolean> {
     const existing = this.threadRenameDrafts.get(scopeId) ?? null;
     if (existing) {
@@ -311,6 +417,45 @@ export class ThreadPanelCoordinator {
     );
   }
 
+  private async startThreadArchiveDraft(
+    scopeId: string,
+    mode: ThreadArchiveMode,
+    threadId: string,
+    locale: AppLocale,
+  ): Promise<boolean> {
+    const existing = this.threadArchiveDrafts.get(scopeId) ?? null;
+    if (existing) {
+      await this.resolveThreadArchiveDraft(
+        scopeId,
+        existing,
+        t(locale, existing.mode === 'archive' ? 'thread_archive_cancelled' : 'thread_unarchive_cancelled'),
+      );
+    }
+
+    const cached = this.host.store.listCachedThreads(scopeId).find((thread) => thread.threadId === threadId) ?? null;
+    if (!cached) {
+      const thread = await this.host.app.readThread(threadId, false, scopeId);
+      if (!thread) {
+        return false;
+      }
+      return this.createThreadArchiveDraft(
+        scopeId,
+        mode,
+        threadId,
+        normalizeThreadRenameLabel(thread.name || thread.preview || t(locale, 'untitled')),
+        locale,
+      );
+    }
+
+    return this.createThreadArchiveDraft(
+      scopeId,
+      mode,
+      threadId,
+      normalizeThreadRenameLabel(cached.name || cached.preview || t(locale, 'untitled')),
+      locale,
+    );
+  }
+
   private async createThreadRenameDraft(
     scopeId: string,
     threadId: string,
@@ -332,6 +477,29 @@ export class ThreadPanelCoordinator {
     return true;
   }
 
+  private async createThreadArchiveDraft(
+    scopeId: string,
+    mode: ThreadArchiveMode,
+    threadId: string,
+    currentName: string,
+    locale: AppLocale,
+  ): Promise<boolean> {
+    const key = mode === 'archive' ? 'thread_archive_prompt' : 'thread_unarchive_prompt';
+    const promptMessageId = await this.host.sendMessage(
+      scopeId,
+      t(locale, key, { threadId, value: truncateInline(currentName, 60) }),
+      threadArchivePromptKeyboard(locale, mode, threadId),
+    );
+    this.threadArchiveDrafts.set(scopeId, {
+      threadId,
+      currentName,
+      mode,
+      promptMessageId,
+      createdAt: Date.now(),
+    });
+    return true;
+  }
+
   private async resolveThreadRenameDraft(scopeId: string, draft: ThreadRenameDraft, text: string): Promise<void> {
     this.threadRenameDrafts.delete(scopeId);
     try {
@@ -342,6 +510,25 @@ export class ThreadPanelCoordinator {
         return;
       }
       this.host.logger.warn('thread.rename_prompt_resolve_failed', {
+        scopeId,
+        threadId: draft.threadId,
+        messageId: draft.promptMessageId,
+        error: String(error),
+      });
+    }
+    await this.host.sendMessage(scopeId, text);
+  }
+
+  private async resolveThreadArchiveDraft(scopeId: string, draft: ThreadArchiveDraft, text: string): Promise<void> {
+    this.threadArchiveDrafts.delete(scopeId);
+    try {
+      await this.host.editMessage(scopeId, draft.promptMessageId, text, []);
+      return;
+    } catch (error) {
+      if (isTelegramMessageGone(error)) {
+        return;
+      }
+      this.host.logger.warn('thread.archive_prompt_resolve_failed', {
         scopeId,
         threadId: draft.threadId,
         messageId: draft.promptMessageId,
@@ -523,6 +710,14 @@ function threadRenamePromptKeyboard(
   return [[
     { text: t(locale, 'button_confirm'), callback_data: `thread:rename:confirm:${threadId}` },
     { text: t(locale, 'button_cancel'), callback_data: `thread:rename:cancel:${threadId}` },
+  ]];
+}
+
+function threadArchivePromptKeyboard(locale: AppLocale, mode: ThreadArchiveMode, threadId: string): InlineKeyboard {
+  const prefix = mode === 'archive' ? 'thread:archive' : 'thread:unarchive';
+  return [[
+    { text: t(locale, 'button_confirm'), callback_data: `${prefix}:confirm:${threadId}` },
+    { text: t(locale, 'button_cancel'), callback_data: `${prefix}:cancel:${threadId}` },
   ]];
 }
 

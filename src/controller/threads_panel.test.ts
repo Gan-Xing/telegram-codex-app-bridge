@@ -219,9 +219,13 @@ test('threads panel renders inline keyboard buttons', async () => {
     assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(0), [
       { text: '1. Primary thread', callback_data: 'thread:open:thread-1' },
       { text: 'Rename', callback_data: 'thread:rename:start:thread-1' },
+      { text: 'Archive', callback_data: 'thread:archive:start:thread-1' },
+    ]);
+    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.find((row) => row.some((button) => button.callback_data === 'thread:list:next')), [
+      { text: 'Next', callback_data: 'thread:list:next' },
     ]);
     assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(-1), [
-      { text: 'Next', callback_data: 'thread:list:next' },
+      { text: 'Archived', callback_data: 'thread:list:view:archived' },
     ]);
   });
 });
@@ -233,8 +237,11 @@ test('threads panel paginates and can clear a search filter', async () => {
 
     assert.match(bot.htmlMessages[0]?.text ?? '', /Filter: <code>thread 1<\/code>/);
     assert.match(bot.htmlMessages[0]?.text ?? '', /Showing 1-3/);
-    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(-1), [
+    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.find((row) => row.some((button) => button.callback_data === 'thread:list:clear')), [
       { text: 'Clear filter', callback_data: 'thread:list:clear' },
+    ]);
+    assert.deepEqual(bot.htmlMessages[0]?.inlineKeyboard?.at(-1), [
+      { text: 'Archived', callback_data: 'thread:list:view:archived' },
     ]);
 
     await composition.threadPanels.handleThreadListNavigationCallback(
@@ -266,9 +273,13 @@ test('threads panel next callback advances to the next page', async () => {
     assert.deepEqual(bot.htmlEdits[0]?.inlineKeyboard?.at(0), [
       { text: '11. Thread 11', callback_data: 'thread:open:thread-11' },
       { text: 'Rename', callback_data: 'thread:rename:start:thread-11' },
+      { text: 'Archive', callback_data: 'thread:archive:start:thread-11' },
+    ]);
+    assert.deepEqual(bot.htmlEdits[0]?.inlineKeyboard?.find((row) => row.some((button) => button.callback_data === 'thread:list:prev')), [
+      { text: 'Prev', callback_data: 'thread:list:prev' },
     ]);
     assert.deepEqual(bot.htmlEdits[0]?.inlineKeyboard?.at(-1), [
-      { text: 'Prev', callback_data: 'thread:list:prev' },
+      { text: 'Archived', callback_data: 'thread:list:view:archived' },
     ]);
     assert.deepEqual(bot.callbackAnswers.at(-1), { id: 'cb-next', text: 'Decision recorded' });
   });

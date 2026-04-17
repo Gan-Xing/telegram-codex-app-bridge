@@ -207,6 +207,14 @@ export class OpenCodeEngineProvider extends EventEmitter implements EngineProvid
     await this.ensureSessionRecord(updated, null);
   }
 
+  async archiveThread(_threadId: string, _scopeId?: string | null): Promise<void> {
+    throw unsupportedProviderFeature('opencode', 'archiveThread', 'Archive is not supported by OpenCode instances');
+  }
+
+  async unarchiveThread(_threadId: string, _scopeId?: string | null): Promise<void> {
+    throw unsupportedProviderFeature('opencode', 'unarchiveThread', 'Unarchive is not supported by OpenCode instances');
+  }
+
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {
     const cwd = options.cwd ?? this.config.defaultCwd;
     this.knownDirectories.add(cwd);

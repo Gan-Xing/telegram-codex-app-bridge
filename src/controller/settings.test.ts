@@ -285,6 +285,18 @@ test('/plan off resets mode to default instead of storing a separate mode value'
   });
 });
 
+test('/mode is blocked while a turn is active', async () => {
+  await withComposition(async (composition, store, bot) => {
+    store.setChatCollaborationMode('chat-1', 'plan');
+    composition.activeTurns.set('turn-1', { turnId: 'turn-1', scopeId: 'chat-1' } as any);
+
+    await composition.telegramRouter.handleCommand({ scopeId: 'chat-1' } as any, 'en', 'mode', ['default']);
+
+    assert.equal(store.getChatSettings('chat-1')?.collaborationMode, 'plan');
+    assert.match(bot.messages.at(-1) ?? '', /Wait for the current turn to finish/i);
+  });
+});
+
 test('/fast sets service tier for the next turn', async () => {
   await withComposition(async (composition, store, bot) => {
     store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');

@@ -44,6 +44,7 @@ test('formatThreadsMessage highlights current thread and metadata', () => {
     pageSize: 10,
     hasPreviousPage: false,
     hasNextPage: false,
+    archived: false,
     searchTerm: null,
   });
   assert.match(rendered, /<b>Recent threads<\/b>/);
@@ -71,6 +72,7 @@ test('formatThreadsMessage escapes html and shows filter', () => {
     pageSize: 10,
     hasPreviousPage: true,
     hasNextPage: true,
+    archived: false,
     searchTerm: 'auth <bug>',
   });
   assert.match(rendered, /Filter: <code>auth &lt;bug&gt;<\/code>/);
@@ -121,6 +123,7 @@ test('buildThreadListKeyboard adds pagination and clear-filter controls', () => 
     pageSize: 10,
     hasPreviousPage: true,
     hasNextPage: true,
+    archived: false,
     searchTerm: 'auth',
   }), [[
     {

@@ -81,7 +81,7 @@ export function loadConfig(): AppConfig {
   const envFile = loadEnvFile();
   const platform = detectPlatformCapabilities();
   const runtimePaths = resolveBridgeRuntimePaths();
-  const requestedDefaultProviderId = optional('CODEX_PROVIDER_ID');
+  const requestedDefaultProviderId = optional('CODEX_DEFAULT_PROVIDER_PROFILE_ID');
   const codexProviderProfiles = loadCodexProviderProfiles({
     codexRealBin: process.env.CODEX_REAL_BIN || resolveCommand('codex') || 'codex',
     codexProxyBin: process.env.CODEX_CLI_BIN || resolveCommand('codex') || 'codex',
@@ -213,9 +213,7 @@ export function loadCodexProviderProfiles(options: {
     ? openaiProfile.id
     : preferredId === 'cliproxyminimax'
       ? proxyProfile.id
-      : options.codexProxyModelCatalogPath
-        ? proxyProfile.id
-        : openaiProfile.id;
+      : openaiProfile.id;
   return defaultProfileId === proxyProfile.id
     ? [proxyProfile, openaiProfile]
     : [openaiProfile, proxyProfile];

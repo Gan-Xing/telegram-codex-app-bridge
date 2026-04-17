@@ -165,6 +165,10 @@ export class SettingsCoordinator {
       await this.showModeSettingsPanel(scopeId, undefined, locale);
       return;
     }
+    if (this.host.turns.findByScope(scopeId)) {
+      await this.host.messages.sendMessage(scopeId, t(locale, 'wait_current_turn'));
+      return;
+    }
     const clearedPlanSessions = await this.applyCollaborationMode(scopeId, nextMode, locale);
     const lines = [
       t(locale, 'callback_mode', {
@@ -184,6 +188,10 @@ export class SettingsCoordinator {
       return;
     }
     const normalized = args.join(' ').trim().toLowerCase();
+    if (this.host.turns.findByScope(event.scopeId)) {
+      await this.host.messages.sendMessage(event.scopeId, t(locale, 'wait_current_turn'));
+      return;
+    }
     if (!normalized || normalized === 'on' || normalized === 'enable' || normalized === 'enabled') {
       await this.applyCollaborationMode(event.scopeId, 'plan', locale);
       await this.host.messages.sendMessage(event.scopeId, [
@@ -799,6 +807,10 @@ export class SettingsCoordinator {
     const nextMode = normalizeRequestedCollaborationMode(rawValue);
     if (!nextMode && rawValue !== 'default') {
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'unsupported_action'));
+      return;
+    }
+    if (this.host.turns.findByScope(event.scopeId)) {
+      await this.host.answerCallback(event.callbackQueryId, t(locale, 'wait_current_turn'));
       return;
     }
     await this.applyCollaborationMode(event.scopeId, nextMode, locale);

@@ -221,6 +221,50 @@ test('plan confirmation callback cancels the pending session without starting a 
   });
 });
 
+test('draft-only turns promote visible final text into a confirmable plan card', async () => {
+  await withComposition(async (composition, store, bot) => {
+    store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');
+    store.setChatCollaborationMode('chat-1', 'plan');
+    store.setBinding('chat-1', 'thread-1', '/tmp/demo');
+    store.savePlanSession({
+      ...makePlanSession(),
+      state: 'drafting_plan',
+      latestPlanVersion: null,
+      lastPlanMessageId: null,
+      lastPromptMessageId: null,
+    });
+
+    await composition.guidedPlans.finalizeTurn({
+      scopeId: 'chat-1',
+      threadId: 'thread-1',
+      turnId: 'turn-draft-1',
+      interruptRequested: false,
+      buffer: 'Plan:\n1. Inspect the repository.\n2. Apply the fix.',
+      finalText: 'Plan:\n1. Inspect the repository.\n2. Apply the fix.',
+      planMessageId: null,
+      planText: null,
+      planExplanation: null,
+      planSteps: [],
+      planDraftText: null,
+      planLastRenderedAt: 0,
+      planRenderRequested: false,
+      forcePlanRender: false,
+      planRenderTask: null,
+      guidedPlanSessionId: 'session-1',
+      guidedPlanDraftOnly: true,
+      guidedPlanExecutionBlocked: false,
+    });
+
+    const session = store.getPlanSession('session-1');
+    assert.equal(session?.state, 'awaiting_plan_confirmation');
+    assert.notEqual(session?.lastPlanMessageId, null);
+    assert.notEqual(session?.lastPromptMessageId, null);
+    assert.equal(bot.htmlMessages.length, 2);
+    assert.match(bot.htmlMessages[0]?.text ?? '', /Plan updated/);
+    assert.match(bot.htmlMessages[1]?.text ?? '', /latest visible plan can still be confirmed/);
+  });
+});
+
 test('plan notifications persist semantic snapshots and stream draft deltas into one card', async () => {
   await withComposition(async (composition, store, bot) => {
     store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');

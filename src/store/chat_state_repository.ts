@@ -90,6 +90,15 @@ export class ChatStateRepository {
     `).run(chatId, providerProfileId, threadId, cwd, Date.now());
   }
 
+  clearBinding(chatId: string): void {
+    const providerProfileId = this.getActiveProviderProfile(chatId);
+    if (providerProfileId === this.defaultProviderProfileId) {
+      this.db.prepare('DELETE FROM chat_bindings WHERE chat_id = ?').run(chatId);
+      return;
+    }
+    this.db.prepare('DELETE FROM workspace_chat_bindings WHERE scope_id = ? AND provider_profile_id = ?').run(chatId, providerProfileId);
+  }
+
   findChatIdByThreadId(threadId: string): string | null {
     const row = this.db.prepare('SELECT chat_id FROM chat_bindings WHERE thread_id = ?').get(threadId) as { chat_id: string } | undefined;
     if (row) {

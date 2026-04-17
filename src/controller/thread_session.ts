@@ -103,30 +103,21 @@ export class ThreadSessionService {
     const turnConfig = await this.resolveTurnConfiguration(scopeId, settings, options.collaborationModeOverride);
     const effectiveAccess = options.accessOverride ?? access;
     try {
-      const turn = await this.host.app.startTurn({
-        threadId: binding.threadId,
-        input,
-        approvalPolicy: effectiveAccess.approvalPolicy,
-        sandboxMode: effectiveAccess.sandboxMode,
-        cwd: binding.cwd ?? this.host.config.defaultCwd,
-        model: turnConfig.model,
-        serviceTier: turnConfig.serviceTier,
-        effort: turnConfig.effort,
-        modelVariant: turnConfig.modelVariant,
-        collaborationMode: turnConfig.collaborationMode,
-        geminiApprovalMode: turnConfig.geminiApprovalMode,
-        developerInstructions: options.developerInstructions ?? null,
-        scopeId,
-      });
-      const resolvedThreadId = turn.threadId ?? binding.threadId;
-      if (resolvedThreadId !== binding.threadId) {
-        const rebound = await this.bindCachedThread(scopeId, resolvedThreadId);
-        return { threadId: rebound.threadId, turnId: turn.id };
-      }
-      return { threadId: binding.threadId, turnId: turn.id };
+      return await this.startTurnOnBinding(scopeId, binding, input, effectiveAccess, turnConfig, options.developerInstructions ?? null);
     } catch (error) {
       if (!isThreadNotFoundError(error)) {
         throw error;
+      }
+      const recovered = await this.recoverExistingThread(scopeId, binding, 'turn-start');
+      if (recovered) {
+        try {
+          return await this.startTurnOnBinding(scopeId, recovered, input, effectiveAccess, turnConfig, options.developerInstructions ?? null);
+        } catch (retryError) {
+          if (!isThreadNotFoundError(retryError)) {
+            throw retryError;
+          }
+          this.host.logger.warn('codex.turn_thread_retry_failed', { scopeId, threadId: binding.threadId });
+        }
       }
       this.host.logger.warn('codex.turn_thread_not_found', { scopeId, threadId: binding.threadId });
       const replacement = await this.createBinding(scopeId, binding.cwd ?? this.host.config.defaultCwd);
@@ -138,27 +129,14 @@ export class ThreadSessionService {
       const nextAccess = resolveAccessMode(this.host.config, nextSettings);
       const nextTurnConfig = await this.resolveTurnConfiguration(scopeId, nextSettings, options.collaborationModeOverride);
       const fallbackAccess = options.accessOverride ?? nextAccess;
-      const turn = await this.host.app.startTurn({
-        threadId: replacement.threadId,
-        input,
-        approvalPolicy: fallbackAccess.approvalPolicy,
-        sandboxMode: fallbackAccess.sandboxMode,
-        cwd: replacement.cwd ?? this.host.config.defaultCwd,
-        model: nextTurnConfig.model,
-        serviceTier: nextTurnConfig.serviceTier,
-        effort: nextTurnConfig.effort,
-        modelVariant: nextTurnConfig.modelVariant,
-        collaborationMode: nextTurnConfig.collaborationMode,
-        geminiApprovalMode: nextTurnConfig.geminiApprovalMode,
-        developerInstructions: options.developerInstructions ?? null,
+      return this.startTurnOnBinding(
         scopeId,
-      });
-      const resolvedThreadId = turn.threadId ?? replacement.threadId;
-      if (resolvedThreadId !== replacement.threadId) {
-        const rebound = await this.bindCachedThread(scopeId, resolvedThreadId);
-        return { threadId: rebound.threadId, turnId: turn.id };
-      }
-      return { threadId: replacement.threadId, turnId: turn.id };
+        replacement,
+        input,
+        fallbackAccess,
+        nextTurnConfig,
+        options.developerInstructions ?? null,
+      );
     }
   }
 
@@ -228,11 +206,14 @@ export class ThreadSessionService {
       return binding;
     }
     try {
-      const session = await this.host.app.resumeThread({ threadId: binding.threadId, scopeId });
-      return this.storeThreadSession(scopeId, session, 'seed');
+      return await this.resumeBinding(scopeId, binding);
     } catch (error) {
       if (!isThreadNotFoundError(error)) {
         throw error;
+      }
+      const recovered = await this.recoverExistingThread(scopeId, binding, 'ensure-ready');
+      if (recovered) {
+        return recovered;
       }
       this.host.logger.warn('codex.thread_binding_stale', { scopeId, threadId: binding.threadId });
       const replacement = await this.createBinding(scopeId, binding.cwd ?? this.host.config.defaultCwd);
@@ -352,6 +333,80 @@ export class ThreadSessionService {
     return normalized;
   }
 
+  private async startTurnOnBinding(
+    scopeId: string,
+    binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
+    input: TurnInput[],
+    access: { approvalPolicy: string; sandboxMode: SandboxModeValue },
+    turnConfig: {
+      model: string | null;
+      serviceTier: ServiceTierValue | null;
+      effort: ReasoningEffortValue | null;
+      modelVariant: string | null;
+      collaborationMode: CollaborationModeValue | null;
+      geminiApprovalMode: GeminiApprovalModeValue | null;
+    },
+    developerInstructions: string | null,
+  ): Promise<{ threadId: string; turnId: string }> {
+    const turn = await this.host.app.startTurn({
+      threadId: binding.threadId,
+      input,
+      approvalPolicy: access.approvalPolicy,
+      sandboxMode: access.sandboxMode,
+      cwd: binding.cwd ?? this.host.config.defaultCwd,
+      model: turnConfig.model,
+      serviceTier: turnConfig.serviceTier,
+      effort: turnConfig.effort,
+      modelVariant: turnConfig.modelVariant,
+      collaborationMode: turnConfig.collaborationMode,
+      geminiApprovalMode: turnConfig.geminiApprovalMode,
+      developerInstructions,
+      scopeId,
+    });
+    const resolvedThreadId = turn.threadId ?? binding.threadId;
+    if (resolvedThreadId !== binding.threadId) {
+      const rebound = await this.bindCachedThread(scopeId, resolvedThreadId);
+      return { threadId: rebound.threadId, turnId: turn.id };
+    }
+    return { threadId: binding.threadId, turnId: turn.id };
+  }
+
+  private async resumeBinding(
+    scopeId: string,
+    binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
+  ): Promise<ThreadBinding> {
+    const session = await this.host.app.resumeThread({ threadId: binding.threadId, scopeId });
+    return this.storeThreadSession(scopeId, session, 'seed');
+  }
+
+  private async recoverExistingThread(
+    scopeId: string,
+    binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
+    reason: 'ensure-ready' | 'turn-start',
+  ): Promise<ThreadBinding | null> {
+    let threadExists = false;
+    try {
+      threadExists = Boolean(await this.host.app.readThread(binding.threadId, false, scopeId));
+    } catch (error) {
+      if (isThreadNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+    if (!threadExists) {
+      return null;
+    }
+    this.host.logger.warn('codex.thread_resume_retry', { scopeId, threadId: binding.threadId, reason });
+    try {
+      return await this.resumeBinding(scopeId, binding);
+    } catch (error) {
+      if (isThreadNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   private async resolveTurnConfiguration(
     scopeId: string,
     settings = this.host.store.getChatSettings(scopeId),
@@ -369,17 +424,20 @@ export class ThreadSessionService {
     const serviceTier = this.supportsServiceTier(scopeId) ? (settings?.serviceTier ?? null) : null;
     const effort = this.supportsReasoningEffort(scopeId) ? (settings?.reasoningEffort ?? null) : null;
     const modelVariant = settings?.modelVariant ?? null;
-    const collaborationMode = this.capabilities.guidedPlan === 'none'
+    const configuredCollaborationMode = this.capabilities.guidedPlan === 'none'
       ? null
       : collaborationModeOverride === undefined
       ? settings?.collaborationMode ?? null
       : collaborationModeOverride;
+    const collaborationMode = this.host.config.bridgeEngine === 'codex' && this.capabilities.guidedPlan !== 'none'
+      ? configuredCollaborationMode ?? 'default'
+      : configuredCollaborationMode;
     const geminiApprovalMode = this.host.config.bridgeEngine !== 'gemini'
       ? null
       : geminiApprovalModeOverride === undefined
         ? settings?.geminiApprovalMode ?? null
         : geminiApprovalModeOverride;
-    if (collaborationMode === 'plan' && !model) {
+    if (collaborationMode !== null && !model) {
       const models = await this.host.app.listModels(scopeId);
       model = resolveCurrentModel(models, null)?.model ?? null;
     }

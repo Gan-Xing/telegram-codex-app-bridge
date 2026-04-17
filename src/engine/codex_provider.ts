@@ -124,6 +124,7 @@ export class CodexEngineProvider extends EventEmitter implements EngineProvider 
     return client.listThreads({
       limit: options.limit,
       searchTerm: options.searchTerm ?? null,
+      archived: options.archived ?? false,
     });
   }
 
@@ -140,6 +141,16 @@ export class CodexEngineProvider extends EventEmitter implements EngineProvider 
   async renameThread(threadId: string, name: string, scopeId?: string | null): Promise<void> {
     const client = await this.ensureProfileClient(this.resolveProfileId(scopeId));
     await client.renameThread(threadId, name);
+  }
+
+  async archiveThread(threadId: string, scopeId?: string | null): Promise<void> {
+    const client = await this.ensureProfileClient(this.resolveProfileId(scopeId));
+    await client.archiveThread(threadId);
+  }
+
+  async unarchiveThread(threadId: string, scopeId?: string | null): Promise<void> {
+    const client = await this.ensureProfileClient(this.resolveProfileId(scopeId));
+    await client.unarchiveThread(threadId);
   }
 
   async startThread(options: StartThreadOptions): Promise<ThreadSessionState> {

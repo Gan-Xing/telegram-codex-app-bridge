@@ -44,6 +44,7 @@ export interface ThreadListPresentationState {
   pageSize: number;
   hasPreviousPage: boolean;
   hasNextPage: boolean;
+  archived: boolean;
   searchTerm?: string | null;
 }
 
@@ -59,18 +60,23 @@ export function formatThreadsMessage(
   currentThreadId: string | null,
   searchTerm?: string | null,
   state?: ThreadListPresentationState,
+  options: { allowThreadArchive?: boolean | undefined } = {},
 ): string {
+  const archivedView = Boolean(state?.archived);
   if (threads.length === 0) {
-    return searchTerm
-      ? t(locale, 'threads_no_matches', { searchTerm: escapeTelegramHtml(searchTerm) })
-      : t(locale, 'threads_no_recent');
+    if (searchTerm) {
+      return t(locale, 'threads_no_matches', { searchTerm: escapeTelegramHtml(searchTerm) });
+    }
+    return archivedView ? t(locale, 'threads_no_archived') : t(locale, 'threads_no_recent');
   }
-  const currentThread = currentThreadId
+  const currentThread = !archivedView && currentThreadId
     ? threads.find(thread => thread.threadId === currentThreadId) ?? null
     : null;
   const headerLines = [
-    t(locale, 'threads_recent_title'),
-    t(locale, 'threads_tap_to_open'),
+    archivedView ? t(locale, 'threads_archived_title') : t(locale, 'threads_recent_title'),
+    archivedView
+      ? t(locale, 'threads_tap_to_restore')
+      : (options.allowThreadArchive ? t(locale, 'threads_tap_to_manage') : t(locale, 'threads_tap_to_open')),
   ];
   if (searchTerm) {
     headerLines.push(t(locale, 'threads_filter', { searchTerm: escapeTelegramHtml(searchTerm) }));
@@ -93,14 +99,29 @@ export function formatThreadsMessage(
   return headerLines.join('\n');
 }
 
-export function buildThreadsKeyboard(locale: AppLocale, threads: ThreadLike[]): Array<Array<{ text: string; callback_data: string }>> {
+export function buildThreadsKeyboard(
+  locale: AppLocale,
+  threads: ThreadLike[],
+  options: { archived?: boolean; allowThreadArchive?: boolean | undefined } = {},
+): Array<Array<{ text: string; callback_data: string }>> {
+  const archivedView = Boolean(options.archived);
   return threads.map((thread, index) => {
     const ordinal = typeof thread.index === 'number' ? thread.index + 1 : index + 1;
     const title = `${ordinal}. ${truncate(compactWhitespace(thread.name || thread.preview || t(locale, 'empty')), 22)}`;
-    return [
+    if (archivedView) {
+      return [
+        { text: title, callback_data: `thread:open:${thread.threadId}` },
+        { text: t(locale, 'button_unarchive'), callback_data: `thread:unarchive:start:${thread.threadId}` },
+      ];
+    }
+    const row: Array<{ text: string; callback_data: string }> = [
       { text: title, callback_data: `thread:open:${thread.threadId}` },
       { text: t(locale, 'button_rename'), callback_data: `thread:rename:start:${thread.threadId}` },
     ];
+    if (options.allowThreadArchive) {
+      row.push({ text: t(locale, 'button_archive'), callback_data: `thread:archive:start:${thread.threadId}` });
+    }
+    return row;
   });
 }
 
@@ -108,8 +129,12 @@ export function buildThreadListKeyboard(
   locale: AppLocale,
   threads: ThreadLike[],
   state: ThreadListPresentationState,
+  options: { allowThreadArchive?: boolean | undefined } = {},
 ): Array<Array<{ text: string; callback_data: string }>> {
-  const rows = buildThreadsKeyboard(locale, threads);
+  const rows = buildThreadsKeyboard(locale, threads, {
+    archived: state.archived,
+    allowThreadArchive: options.allowThreadArchive,
+  });
   const navigationRow: InlineButton[] = [];
   if (state.hasPreviousPage) {
     navigationRow.push({ text: t(locale, 'button_prev_page'), callback_data: 'thread:list:prev' });
@@ -122,6 +147,12 @@ export function buildThreadListKeyboard(
   }
   if (state.searchTerm) {
     rows.push([{ text: t(locale, 'button_clear_filter'), callback_data: 'thread:list:clear' }]);
+  }
+  if (options.allowThreadArchive) {
+    rows.push([{
+      text: state.archived ? t(locale, 'button_show_active') : t(locale, 'button_show_archived'),
+      callback_data: state.archived ? 'thread:list:view:active' : 'thread:list:view:archived',
+    }]);
   }
   return rows;
 }
