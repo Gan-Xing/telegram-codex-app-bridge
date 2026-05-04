@@ -80,6 +80,21 @@ export interface SteerTurnOptions {
   scopeId?: string | null;
 }
 
+export type ReviewDelivery = 'inline' | 'detached';
+
+export type ReviewTarget =
+  | { type: 'uncommittedChanges' }
+  | { type: 'baseBranch'; branch: string }
+  | { type: 'commit'; sha: string; title?: string | null }
+  | { type: 'custom'; instructions: string };
+
+export interface StartReviewOptions {
+  threadId: string;
+  target: ReviewTarget;
+  delivery?: ReviewDelivery | null;
+  scopeId?: string | null;
+}
+
 export interface TurnStartResult {
   id: string;
   status: string;
@@ -88,6 +103,11 @@ export interface TurnStartResult {
 
 export interface TurnSteerResult {
   turnId: string;
+}
+
+export interface ReviewStartResult {
+  turnId: string;
+  reviewThreadId: string;
 }
 
 export interface EngineCapabilities {
@@ -153,6 +173,7 @@ export interface EngineProvider {
   revealThread(threadId: string, scopeId?: string | null): Promise<void>;
 
   startTurn(options: StartTurnOptions): Promise<TurnStartResult>;
+  startReview?(options: StartReviewOptions): Promise<ReviewStartResult>;
   steerTurn(options: SteerTurnOptions): Promise<TurnSteerResult>;
   interruptTurn(threadId: string, turnId: string, scopeId?: string | null): Promise<void>;
   respond(requestId: string | number, result: unknown, scopeId?: string | null): Promise<void>;

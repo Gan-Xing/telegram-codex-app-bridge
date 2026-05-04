@@ -16,9 +16,11 @@ import type {
   EngineServerRequest,
   ListThreadsOptions,
   ResumeThreadOptions,
+  StartReviewOptions,
   StartThreadOptions,
   StartTurnOptions,
   SteerTurnOptions,
+  ReviewStartResult,
   TurnStartResult,
   TurnSteerResult,
 } from './types.js';
@@ -196,6 +198,11 @@ export class CodexEngineProvider extends EventEmitter implements EngineProvider 
       scopeId: options.scopeId ?? null,
     };
     return client.startTurn(request);
+  }
+
+  async startReview(options: StartReviewOptions): Promise<ReviewStartResult> {
+    const client = await this.ensureProfileClient(this.resolveProfileId(options.scopeId));
+    return client.startReview(options);
   }
 
   async steerTurn(options: SteerTurnOptions): Promise<TurnSteerResult> {

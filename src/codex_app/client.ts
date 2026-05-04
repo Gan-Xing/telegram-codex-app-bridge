@@ -10,7 +10,9 @@ import type {
   EngineNotification as JsonRpcNotification,
   EngineServerRequest as JsonRpcServerRequest,
   ListThreadsOptions,
+  ReviewTarget,
   ResumeThreadOptions,
+  StartReviewOptions,
   StartThreadOptions,
   StartTurnOptions,
   SteerTurnOptions,
@@ -42,6 +44,9 @@ export type {
   ListThreadsOptions,
   LocalImageTurnInput,
   ResumeThreadOptions,
+  ReviewDelivery,
+  ReviewTarget,
+  StartReviewOptions,
   StartThreadOptions,
   StartTurnOptions,
   SteerTurnOptions,
@@ -234,6 +239,24 @@ export class CodexAppClient extends EventEmitter {
     return (result as any).turn;
   }
 
+  async startReview(options: StartReviewOptions): Promise<{ turnId: string; reviewThreadId: string }> {
+    const result = await this.request('review/start', {
+      threadId: options.threadId,
+      target: serializeReviewTarget(options.target),
+      delivery: options.delivery ?? undefined,
+    });
+    const turnId = typeof (result as any)?.turn?.id === 'string'
+      ? (result as any).turn.id
+      : String((result as any)?.turn?.id ?? '');
+    const reviewThreadId = typeof (result as any)?.reviewThreadId === 'string'
+      ? (result as any).reviewThreadId
+      : options.threadId;
+    if (!turnId) {
+      throw new Error('review/start returned an empty turn id');
+    }
+    return { turnId, reviewThreadId };
+  }
+
   async steerTurn(options: SteerTurnOptions): Promise<{ turnId: string }> {
     return this.request('turn/steer', {
       threadId: options.threadId,
@@ -266,6 +289,10 @@ export class CodexAppClient extends EventEmitter {
     const mapped = mapAccountRateLimitResponse(result);
     this.accountRateLimits = mapped;
     return mapped;
+  }
+
+  async requestRaw(method: string, params: unknown): Promise<unknown> {
+    return this.request(method, params);
   }
 
   async revealThread(threadId: string): Promise<void> {
@@ -692,6 +719,30 @@ function serializeCollaborationMode(options: StartTurnOptions): Record<string, u
     };
   }
   return null;
+}
+
+function serializeReviewTarget(target: ReviewTarget): Record<string, unknown> {
+  switch (target.type) {
+    case 'uncommittedChanges':
+      return { type: 'uncommittedChanges' };
+    case 'baseBranch':
+      return { type: 'baseBranch', branch: target.branch };
+    case 'commit':
+      return {
+        type: 'commit',
+        sha: target.sha,
+        title: target.title ?? null,
+      };
+    case 'custom':
+      return {
+        type: 'custom',
+        instructions: target.instructions,
+      };
+    default: {
+      const exhaustiveCheck: never = target;
+      throw new Error(`Unsupported review target: ${String(exhaustiveCheck)}`);
+    }
+  }
 }
 
 function mapAccountRateLimitResponse(raw: any): AccountRateLimitSnapshot | null {

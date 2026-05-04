@@ -1,4 +1,5 @@
 import type { AppConfig } from '../config.js';
+import { CodexAccountManager } from '../codex_app/account_manager.js';
 import { normalizeLocale, t } from '../i18n.js';
 import type { Logger } from '../logger.js';
 import type { BridgeStore } from '../store/database.js';
@@ -71,6 +72,12 @@ export function createBridgeComposition(
       store.insertAudit(direction, scopeId, eventType, summary);
     },
   });
+  const codexAccounts = config.bridgeEngine === 'codex'
+    ? new CodexAccountManager({
+        codexCliBin: config.codexProviderProfiles.find((profile) => profile.id === 'openai-native')?.cliBin
+          ?? config.codexCliBin,
+      })
+    : null;
   const runtimeStatus = new RuntimeStatusStore(config, store, app, activeTurns);
 
   const localeForChat = (scopeId: string, languageCode?: string | null): AppLocale => {
@@ -255,6 +262,9 @@ export function createBridgeComposition(
     turnLifecycle,
     statusPreview,
     startTurnWithRecovery: (scopeId, binding, input, options) => sessions.startTurnWithRecovery(scopeId, binding, input, options),
+    startReviewWithRecovery: (scopeId, binding, options) => sessions.startReviewWithRecovery(scopeId, binding, options),
+    createBinding: (scopeId, requestedCwd) => sessions.createBinding(scopeId, requestedCwd),
+    ensureThreadReady: (scopeId, binding) => sessions.ensureThreadReady(scopeId, binding),
     noteTurnFailure: (message) => {
       runtimeStatus.setSerializedLastError(message);
       updateStatus();
@@ -412,6 +422,14 @@ export function createBridgeComposition(
     sessions,
     statusCommand,
     messages,
+    codexAccounts,
+    restartEngineAfterAccountSwitch: async () => {
+      await app.stop();
+      updateStatus();
+      await app.start();
+      runtimeStatus.clearLastError();
+      updateStatus();
+    },
     providerCapabilities: app.capabilities,
     localeForChat,
     botUsername: () => runtimeStatus.getBotUsername(),

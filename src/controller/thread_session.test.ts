@@ -152,6 +152,9 @@ function makeApp(tempDir: string) {
     startTurnCalls: 0,
     startTurnPayloads: [] as any[],
     startTurnFailures: [] as Error[],
+    startReviewCalls: 0,
+    startReviewPayloads: [] as any[],
+    startReviewFailures: [] as Error[],
     resumeFailures: [] as Error[],
     readThreadResult: makeThread('thread-1', tempDir) as AppThread | null,
     availableModels: [{
@@ -191,6 +194,18 @@ function makeApp(tempDir: string) {
         throw failure;
       }
       return { id: `turn-${this.startTurnCalls}`, status: 'running', threadId };
+    },
+    async startReview(options: { threadId: string; target: unknown; delivery?: string | null }) {
+      this.startReviewCalls += 1;
+      this.startReviewPayloads.push(options);
+      const failure = this.startReviewFailures.shift() ?? null;
+      if (failure) {
+        throw failure;
+      }
+      return {
+        turnId: `review-turn-${this.startReviewCalls}`,
+        reviewThreadId: options.delivery === 'detached' ? `review-thread-${this.startReviewCalls}` : options.threadId,
+      };
     },
     async revealThread() {},
   };
@@ -268,5 +283,47 @@ test('startTurnWithRecovery resolves a concrete default model for Codex default 
 
     assert.equal(app.startTurnPayloads[0]?.collaborationMode, 'default');
     assert.equal(app.startTurnPayloads[0]?.model, 'gpt-5.4');
+  });
+});
+
+test('startReviewWithRecovery forwards a native uncommitted-changes review request', async () => {
+  await withService(async (service, store, app, _sentMessages, tempDir) => {
+    const binding = seedBinding(store, tempDir);
+
+    const result = await service.startReviewWithRecovery('chat-1', binding, {
+      target: { type: 'uncommittedChanges' },
+      delivery: null,
+    });
+
+    assert.equal(result.threadId, 'thread-1');
+    assert.equal(result.turnId, 'review-turn-1');
+    assert.equal(app.startReviewCalls, 1);
+    assert.deepEqual(app.startReviewPayloads[0], {
+      threadId: 'thread-1',
+      target: { type: 'uncommittedChanges' },
+      delivery: null,
+      scopeId: 'chat-1',
+    });
+  });
+});
+
+test('startReviewWithRecovery rebinds the chat when detached review returns a new thread id', async () => {
+  await withService(async (service, store, app, _sentMessages, tempDir) => {
+    const binding = seedBinding(store, tempDir);
+
+    const result = await service.startReviewWithRecovery('chat-1', binding, {
+      target: { type: 'baseBranch', branch: 'main' },
+      delivery: 'detached',
+    });
+
+    assert.equal(result.threadId, 'review-thread-1');
+    assert.equal(store.getBinding('chat-1')?.threadId, 'review-thread-1');
+    assert.equal(app.startReviewCalls, 1);
+    assert.deepEqual(app.startReviewPayloads[0], {
+      threadId: 'thread-1',
+      target: { type: 'baseBranch', branch: 'main' },
+      delivery: 'detached',
+      scopeId: 'chat-1',
+    });
   });
 });

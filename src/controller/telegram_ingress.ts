@@ -3,6 +3,11 @@ import { isDefaultTelegramScope, resolveTelegramAddressing } from '../telegram/a
 import type { TelegramCallbackEvent, TelegramTextEvent } from '../telegram/gateway.js';
 import { getTelegramCommands, t } from '../i18n.js';
 import type { AppConfig } from '../config.js';
+import type {
+  CodexAccountManager,
+  CodexAccountSummary,
+  CodexPendingLoginSummary,
+} from '../codex_app/account_manager.js';
 import {
   resolveCodexProfileReasoningEffortSupport,
   resolveCodexProfileServiceTierSupport,
@@ -24,7 +29,7 @@ import type { ServiceControlCoordinator } from './service_control.js';
 import type { ThreadSessionService } from './thread_session.js';
 import type { StatusCommandCoordinator } from './status_command.js';
 import type { TelegramMessageService } from './telegram_message_service.js';
-import { isThreadNotFoundError } from './utils.js';
+import { formatUserError, isThreadNotFoundError } from './utils.js';
 import { formatModelDisplayName, formatServiceTierLabel } from './presentation.js';
 
 interface TelegramIngressHost {
@@ -43,6 +48,8 @@ interface TelegramIngressHost {
   sessions: ThreadSessionService;
   statusCommand: StatusCommandCoordinator;
   messages: TelegramMessageService;
+  codexAccounts: CodexAccountManager | null;
+  restartEngineAfterAccountSwitch: () => Promise<void>;
   providerCapabilities: EngineCapabilities;
   localeForChat: (scopeId: string, languageCode?: string | null) => AppLocale;
   botUsername: () => string | null;
@@ -63,6 +70,7 @@ export class TelegramIngressRouter {
       start: (event, locale) => this.showHelp(event.scopeId, locale),
       help: (event, locale) => this.showHelp(event.scopeId, locale),
       status: (event, locale) => this.host.statusCommand.showStatus(event.scopeId, locale),
+      login: (event, locale, args) => this.handleLoginCommand(event, locale, args),
       where: (event, locale) => this.host.settings.showWherePanel(event.scopeId, undefined, locale),
       threads: (event, locale, args) => {
         const query = parseThreadsCommandArgs(args);
@@ -81,6 +89,7 @@ export class TelegramIngressRouter {
       restart: (event, locale) => this.host.serviceControl.restart(event.scopeId, locale),
       queue: (event, locale, args) => this.host.queue.handleQueueCommand(event, locale, args),
       guide: (event, locale, args) => this.host.turnGuidance.handleGuideCommand(event, locale, args),
+      review: (event, locale, args) => this.host.turnExecution.handleReviewCommand(event, locale, args),
       permissions: (event, locale) => this.host.settings.showAccessSettingsPanel(event.scopeId, undefined, locale),
       access: (event, locale) => this.host.settings.showAccessSettingsPanel(event.scopeId, undefined, locale),
       plan: (event, locale, args) => this.host.settings.handlePlanAliasCommand(event, locale, args),
@@ -392,6 +401,184 @@ export class TelegramIngressRouter {
     await this.host.threadPanels.renderThreadHistoryPreview(scopeId, binding.threadId, locale);
   }
 
+  private async handleLoginCommand(event: TelegramTextEvent, locale: AppLocale, args: string[]): Promise<void> {
+    const accounts = this.host.codexAccounts;
+    if (!accounts) {
+      await this.host.messages.sendMessage(event.scopeId, t(locale, 'login_unsupported'));
+      return;
+    }
+    const action = String(args[0] ?? '').trim().toLowerCase();
+    if (!action) {
+      await this.handleLoginStartOrStatusCommand(event.scopeId, locale, accounts);
+      return;
+    }
+    if (action === 'list') {
+      await this.handleLoginListCommand(event.scopeId, locale, accounts);
+      return;
+    }
+    if (action === 'cancel') {
+      const cancelled = await accounts.cancelPendingLogin();
+      await this.host.messages.sendMessage(event.scopeId, t(locale, cancelled ? 'login_cancelled' : 'login_no_pending'));
+      return;
+    }
+    if (/^\d+$/u.test(action)) {
+      await this.handleLoginSwitchCommand(event.scopeId, locale, accounts, Number.parseInt(action, 10));
+      return;
+    }
+    await this.host.messages.sendMessage(event.scopeId, t(locale, 'login_usage'));
+  }
+
+  private async handleLoginStartOrStatusCommand(
+    scopeId: string,
+    locale: AppLocale,
+    accounts: CodexAccountManager,
+  ): Promise<void> {
+    try {
+      const refreshResult = await accounts.refreshPendingLogin();
+      if (refreshResult?.status === 'completed') {
+        await this.restartEngineAfterCompletedLoginIfIdle(scopeId, locale);
+        await this.host.messages.sendMessage(scopeId, [
+          t(locale, 'login_completed'),
+          ...this.renderLoginAccountLines(locale, refreshResult.account, true),
+          t(locale, 'login_completed_next'),
+        ].join('\n'));
+        return;
+      }
+      if (refreshResult?.status === 'pending') {
+        await this.host.messages.sendMessage(scopeId, this.renderPendingLoginLines(locale, refreshResult.pendingLogin, true).join('\n'));
+        return;
+      }
+      if (refreshResult?.status === 'failed') {
+        await this.host.messages.sendMessage(scopeId, t(locale, 'login_start_failed', { error: formatUserError(refreshResult.error) }));
+        return;
+      }
+      const pendingLogin = await accounts.startDeviceLogin({ requestedByScope: scopeId });
+      await this.host.messages.sendMessage(scopeId, this.renderPendingLoginLines(locale, pendingLogin, true).join('\n'));
+    } catch (error) {
+      await this.host.messages.sendMessage(scopeId, t(locale, 'login_start_failed', { error: formatUserError(error) }));
+    }
+  }
+
+  private async handleLoginListCommand(
+    scopeId: string,
+    locale: AppLocale,
+    accounts: CodexAccountManager,
+  ): Promise<void> {
+    const refreshResult = await accounts.refreshPendingLogin();
+    if (refreshResult?.status === 'completed') {
+      await this.restartEngineAfterCompletedLoginIfIdle(scopeId, locale);
+    }
+    const listing = await accounts.listAccounts();
+    const lines = [t(locale, 'login_list_title', { count: listing.accounts.length })];
+    if (listing.accounts.length === 0) {
+      lines.push(t(locale, 'login_list_empty'));
+      lines.push(t(locale, 'login_list_empty_hint'));
+    } else {
+      for (const [index, account] of listing.accounts.entries()) {
+        lines.push(this.formatLoginListItem(locale, index, account));
+      }
+      lines.push(t(locale, 'login_list_switch_hint'));
+    }
+    if (refreshResult?.status === 'completed') {
+      lines.push('');
+      lines.push(t(locale, 'login_completed'));
+      lines.push(...this.renderLoginAccountLines(locale, refreshResult.account, true));
+    } else if (listing.pendingLogin) {
+      lines.push('');
+      lines.push(...this.renderPendingLoginLines(locale, listing.pendingLogin, false));
+    }
+    await this.host.messages.sendMessage(scopeId, lines.join('\n'));
+  }
+
+  private async handleLoginSwitchCommand(
+    scopeId: string,
+    locale: AppLocale,
+    accounts: CodexAccountManager,
+    index: number,
+  ): Promise<void> {
+    if (!Number.isFinite(index) || index < 1) {
+      await this.host.messages.sendMessage(scopeId, [
+        t(locale, 'login_switch_invalid_index', { index }),
+        t(locale, 'login_switch_usage'),
+      ].join('\n'));
+      return;
+    }
+    if (this.host.turns.count() > 0) {
+      await this.host.messages.sendMessage(scopeId, t(locale, 'login_switch_blocked'));
+      return;
+    }
+    try {
+      const result = await accounts.switchAccountByIndex(index);
+      await this.host.restartEngineAfterAccountSwitch();
+      await this.host.messages.sendMessage(scopeId, [
+        t(locale, 'login_switch_success'),
+        ...this.renderLoginAccountLines(locale, result.account, true),
+        t(locale, 'login_auth_path', { value: result.authPath }),
+        ...(result.refreshed ? [t(locale, 'login_switch_refreshed')] : []),
+        t(locale, 'login_reconnected'),
+        t(locale, 'login_switch_thread_notice'),
+      ].join('\n'));
+    } catch (error) {
+      await this.host.messages.sendMessage(scopeId, t(locale, 'login_switch_failed', { error: formatUserError(error) }));
+    }
+  }
+
+  private async restartEngineAfterCompletedLoginIfIdle(scopeId: string, locale: AppLocale): Promise<void> {
+    if (this.host.turns.count() > 0) {
+      await this.host.messages.sendMessage(scopeId, t(locale, 'login_completed_reconnect_skipped'));
+      return;
+    }
+    await this.host.restartEngineAfterAccountSwitch();
+  }
+
+  private renderPendingLoginLines(locale: AppLocale, pendingLogin: CodexPendingLoginSummary | null, includeContinueHint: boolean): string[] {
+    if (!pendingLogin) {
+      return [t(locale, 'login_no_pending')];
+    }
+    const lines = [
+      t(locale, 'login_pending_title'),
+      t(locale, 'login_url', { value: pendingLogin.verificationUriComplete ?? pendingLogin.verificationUri }),
+      t(locale, 'login_user_code', { value: pendingLogin.userCode }),
+      t(locale, 'login_expires_at', { value: new Date(pendingLogin.expiresAt).toISOString() }),
+      t(locale, 'login_global_notice'),
+    ];
+    if (includeContinueHint) {
+      lines.push(t(locale, 'login_pending_next'));
+    }
+    return lines;
+  }
+
+  private renderLoginAccountLines(locale: AppLocale, account: CodexAccountSummary | null, includePrefix: boolean): string[] {
+    if (!account) {
+      return [];
+    }
+    const lines = [
+      includePrefix
+        ? t(locale, 'login_account', { value: this.formatLoginAccountIdentity(account) })
+        : this.formatLoginAccountIdentity(account),
+    ];
+    const planType = account.planType ?? account.plan ?? null;
+    if (planType) {
+      lines.push(t(locale, 'login_plan', { value: planType }));
+    }
+    return lines;
+  }
+
+  private formatLoginListItem(locale: AppLocale, index: number, account: CodexAccountSummary): string {
+    const markers = account.isActive ? [`${t(locale, 'login_active_marker')}`] : [];
+    const suffix = markers.length > 0 ? ` (${markers.join(', ')})` : '';
+    return `${index + 1}. ${this.formatLoginAccountIdentity(account)}${suffix}`;
+  }
+
+  private formatLoginAccountIdentity(account: CodexAccountSummary): string {
+    const primary = account.email ?? account.name ?? account.accountId ?? account.label ?? account.id;
+    const details = [
+      account.planType ?? account.plan ?? null,
+      account.accountId ? `id:${account.accountId.slice(0, 8)}` : null,
+    ].filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index);
+    return details.length > 0 ? `${primary} (${details.join(', ')})` : primary;
+  }
+
   private async handleNewCommand(scopeId: string, locale: AppLocale, args: string[]): Promise<void> {
     const cwd = args.join(' ').trim() || this.host.config.defaultCwd;
     const binding = await this.host.sessions.createBinding(scopeId, cwd);
@@ -437,11 +624,15 @@ export class TelegramIngressRouter {
         return capabilities.threads;
       case 'guide':
         return capabilities.steerActiveTurn;
+      case 'review':
+        return this.host.config.bridgeEngine === 'codex';
       case 'reveal':
       case 'focus':
         return capabilities.reveal;
       case 'reconnect':
         return capabilities.reconnect;
+      case 'login':
+        return this.host.config.bridgeEngine === 'codex' && Boolean(this.host.codexAccounts);
       case 'restart':
         return this.supportsRestartCommand();
       case 'mode':

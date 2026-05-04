@@ -9,6 +9,7 @@ import type { ToolBatchState, TurnRenderingState, TurnSegmentState } from './tur
 import type { TurnCompletionState } from './turn_completion.js';
 
 export interface ActiveTurnLifecycleState extends TurnRenderingState, GuidedPlanTurnState {
+  turnKind?: 'default' | 'review';
   chatId: string;
   profileId?: string | null;
   topicId: number | null;
@@ -91,6 +92,7 @@ export class TurnLifecycleCoordinator {
       guidedPlanDraftOnly?: boolean;
       queuedInputId?: string | null;
       profileId?: string | null;
+      turnKind?: 'default' | 'review';
     } = {},
   ): Promise<void> {
     let resolveTurn!: () => void;
@@ -98,6 +100,7 @@ export class TurnLifecycleCoordinator {
       resolveTurn = resolve;
     });
     const active: ActiveTurnLifecycleState = {
+      turnKind: options.turnKind ?? 'default',
       scopeId,
       chatId,
       profileId: options.profileId ?? null,

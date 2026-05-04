@@ -156,3 +156,41 @@ test('CodexAppClient sends an explicit default collaboration mode payload', asyn
     },
   });
 });
+
+test('CodexAppClient sends native review/start payloads unchanged', async () => {
+  const client = new CodexAppClient(
+    'codex',
+    '',
+    false,
+    new Logger('error', path.join(os.tmpdir(), 'telegram-codex-client-review.test.log')),
+    process.platform,
+  ) as any;
+
+  let requestMethod: string | null = null;
+  let requestPayload: any = null;
+  client.request = async (method: string, params: any) => {
+    requestMethod = method;
+    requestPayload = params;
+    return {
+      turn: { id: 'review-turn-1', status: 'running' },
+      reviewThreadId: 'review-thread-1',
+    };
+  };
+
+  const result = await client.startReview({
+    threadId: 'thread-1',
+    target: { type: 'baseBranch', branch: 'main' },
+    delivery: 'detached',
+  });
+
+  assert.equal(requestMethod, 'review/start');
+  assert.deepEqual(requestPayload, {
+    threadId: 'thread-1',
+    target: { type: 'baseBranch', branch: 'main' },
+    delivery: 'detached',
+  });
+  assert.deepEqual(result, {
+    turnId: 'review-turn-1',
+    reviewThreadId: 'review-thread-1',
+  });
+});

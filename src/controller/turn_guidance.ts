@@ -295,7 +295,12 @@ export class TurnGuidanceCoordinator {
     | 'guidance_blocked_pending_input'
     | 'guidance_blocked_pending_approval'
     | 'guidance_blocked_plan_pending'
+    | 'guidance_blocked_review_turn'
     | null {
+    const active = this.host.turns.findByScope(scopeId);
+    if (active?.turnKind === 'review') {
+      return 'guidance_blocked_review_turn';
+    }
     if (this.host.store.getPendingUserInputForChat(scopeId)) {
       return 'guidance_blocked_pending_input';
     }

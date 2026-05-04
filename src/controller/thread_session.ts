@@ -6,7 +6,13 @@ import {
   resolveCodexProfileServiceTierSupport,
   resolveCodexProviderProfile,
 } from '../codex_profiles.js';
-import { resolveEngineCapabilities, type EngineProvider, type TurnInput } from '../engine/types.js';
+import {
+  resolveEngineCapabilities,
+  type EngineProvider,
+  type ReviewDelivery,
+  type ReviewTarget,
+  type TurnInput,
+} from '../engine/types.js';
 import { t } from '../i18n.js';
 import type { Logger } from '../logger.js';
 import type { BridgeStore } from '../store/database.js';
@@ -41,7 +47,8 @@ interface ThreadSessionHost {
   config: AppConfig;
   store: BridgeStore;
   logger: Logger;
-  app: Pick<EngineProvider, 'capabilities' | 'listModels' | 'startThread' | 'startTurn' | 'resumeThread' | 'readThread' | 'revealThread'>;
+  app: Pick<EngineProvider, 'capabilities' | 'listModels' | 'startThread' | 'startTurn' | 'resumeThread' | 'readThread' | 'revealThread'>
+    & Partial<Pick<EngineProvider, 'startReview'>>;
   bot: Pick<TelegramGateway, 'getFile' | 'downloadResolvedFile'>;
   attachedThreads: ThreadAttachmentRegistry;
   localeForChat: (scopeId: string, languageCode?: string | null) => AppLocale;
@@ -137,6 +144,41 @@ export class ThreadSessionService {
         nextTurnConfig,
         options.developerInstructions ?? null,
       );
+    }
+  }
+
+  async startReviewWithRecovery(
+    scopeId: string,
+    binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
+    options: {
+      target: ReviewTarget;
+      delivery?: ReviewDelivery | null;
+    },
+  ): Promise<{ threadId: string; turnId: string }> {
+    try {
+      return await this.startReviewOnBinding(scopeId, binding, options);
+    } catch (error) {
+      if (!isThreadNotFoundError(error)) {
+        throw error;
+      }
+      const recovered = await this.recoverExistingThread(scopeId, binding, 'review-start');
+      if (recovered) {
+        try {
+          return await this.startReviewOnBinding(scopeId, recovered, options);
+        } catch (retryError) {
+          if (!isThreadNotFoundError(retryError)) {
+            throw retryError;
+          }
+          this.host.logger.warn('codex.review_thread_retry_failed', { scopeId, threadId: binding.threadId });
+        }
+      }
+      this.host.logger.warn('codex.review_thread_not_found', { scopeId, threadId: binding.threadId });
+      const replacement = await this.createBinding(scopeId, binding.cwd ?? this.host.config.defaultCwd);
+      await this.host.sendMessage(
+        scopeId,
+        t(this.host.localeForChat(scopeId), 'current_thread_unavailable_continued', { threadId: replacement.threadId }),
+      );
+      return this.startReviewOnBinding(scopeId, replacement, options);
     }
   }
 
@@ -371,6 +413,34 @@ export class ThreadSessionService {
     return { threadId: binding.threadId, turnId: turn.id };
   }
 
+  private async startReviewOnBinding(
+    scopeId: string,
+    binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
+    options: {
+      target: ReviewTarget;
+      delivery?: ReviewDelivery | null;
+    },
+  ): Promise<{ threadId: string; turnId: string }> {
+    if (typeof this.host.app.startReview !== 'function') {
+      throw new Error('Native review is unavailable on this engine');
+    }
+    const review = await this.host.app.startReview({
+      threadId: binding.threadId,
+      target: options.target,
+      delivery: options.delivery ?? null,
+      scopeId,
+    });
+    const resolvedThreadId = review.reviewThreadId || binding.threadId;
+    if (resolvedThreadId !== binding.threadId) {
+      this.host.store.setBinding(scopeId, resolvedThreadId, binding.cwd ?? this.host.config.defaultCwd);
+      this.host.updateStatus();
+    }
+    return {
+      threadId: resolvedThreadId,
+      turnId: review.turnId,
+    };
+  }
+
   private async resumeBinding(
     scopeId: string,
     binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
@@ -382,7 +452,7 @@ export class ThreadSessionService {
   private async recoverExistingThread(
     scopeId: string,
     binding: Pick<ThreadBinding, 'threadId' | 'cwd'>,
-    reason: 'ensure-ready' | 'turn-start',
+    reason: 'ensure-ready' | 'turn-start' | 'review-start',
   ): Promise<ThreadBinding | null> {
     let threadExists = false;
     try {

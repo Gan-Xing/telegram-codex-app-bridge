@@ -39,6 +39,7 @@ export interface ArchivedStatusContent {
 }
 
 export interface ActiveTurn {
+  turnKind?: 'default' | 'review';
   scopeId: string;
   profileId?: string | null;
   chatId: string;
