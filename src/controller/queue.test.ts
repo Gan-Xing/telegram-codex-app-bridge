@@ -142,6 +142,8 @@ function makeApp() {
   return {
     startTurnCalls: [] as any[],
     steerTurnCalls: [] as any[],
+    interruptTurnCalls: [] as any[],
+    interruptError: null as Error | null,
     isConnected() {
       return true;
     },
@@ -155,6 +157,12 @@ function makeApp() {
     async steerTurn(options: any) {
       this.steerTurnCalls.push(options);
       return { turnId: options.turnId };
+    },
+    async interruptTurn(threadId: string, turnId: string, scopeId?: string | null) {
+      this.interruptTurnCalls.push({ threadId, turnId, scopeId: scopeId ?? null });
+      if (this.interruptError) {
+        throw this.interruptError;
+      }
     },
   };
 }
@@ -336,6 +344,25 @@ test('turn completion automatically starts the next queued message in FIFO order
       assert.equal(store.getQueuedTurnInput(queuedRecords[1]!.queueId)?.status, 'processing');
     });
     assert.equal(app.startTurnCalls[2]?.input?.[0]?.text, 'Queued two');
+  });
+});
+
+test('/stop retires stale local active turn when upstream has no active turn', async () => {
+  await withComposition(async (composition, store, bot, app, tempDir) => {
+    store.setChatSettings('chat-1', 'gpt-5', 'medium', 'en');
+    await seedActiveTurn(composition, store, tempDir);
+    await composition.telegramRouter.handleText(makeTextEvent('Queued after stale turn'));
+
+    app.interruptError = new Error('no active turn to interrupt');
+    await composition.telegramRouter.handleCommand(makeTextEvent('/stop'), 'en', 'stop', []);
+
+    assert.equal(app.interruptTurnCalls.length, 1);
+    assert.ok(bot.messages.some((message) => /upstream turn was already gone/i.test(message.text)));
+    await waitFor(() => {
+      assert.equal(composition.activeTurns.findByScope('chat-1')?.turnId, 'turn-2');
+      assert.equal(app.startTurnCalls.length, 2);
+    });
+    assert.equal(store.countQueuedTurnInputs('chat-1'), 0);
   });
 });
 

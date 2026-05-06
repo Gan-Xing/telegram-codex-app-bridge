@@ -96,6 +96,7 @@ export class TelegramIngressRouter {
       effort: (event, locale, args) => this.host.settings.handleEffortCommand(event, locale, args),
       reveal: (event, locale) => this.handleRevealCommand(event.scopeId, locale),
       focus: (event, locale) => this.handleRevealCommand(event.scopeId, locale),
+      stop: (event, locale) => this.host.turnExecution.handleInterruptCommand(event.scopeId, locale).then(() => undefined),
       interrupt: (event, locale) => this.host.turnExecution.handleInterruptCommand(event.scopeId, locale).then(() => undefined),
     };
     this.callbackRoutes = [

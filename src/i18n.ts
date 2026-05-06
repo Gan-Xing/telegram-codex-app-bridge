@@ -153,6 +153,7 @@ const EN_MESSAGES = {
     reveal_not_supported: 'Reveal is only available for Codex bots.',
     no_active_turn: 'No active turn to interrupt.',
     interrupt_requested_for: 'Interrupt requested for {turnId}',
+    stale_turn_retired: 'The upstream turn was already gone. Cleaned the stuck local reply state.',
     unknown_command: 'Unknown command: /{name}',
     command_not_supported: 'This bot does not support /{name}.',
     unsupported_action: 'Unsupported action',
@@ -704,6 +705,7 @@ const ZH_MESSAGES = {
     reveal_not_supported: '只有 Codex bot 支持本机打开。',
     no_active_turn: '当前没有可中断的回复。',
     interrupt_requested_for: '已请求中断 {turnId}',
+    stale_turn_retired: '上游回复已经不存在，已清理本地卡住的回复状态。',
     unknown_command: '未知命令：/{name}',
     command_not_supported: '这个 bot 不支持 /{name}。',
     unsupported_action: '不支持的操作',
@@ -1255,6 +1257,7 @@ const FR_MESSAGES = {
   reveal_not_supported: 'Reveal est disponible uniquement pour les bots Codex.',
   no_active_turn: 'Aucun tour actif a interrompre.',
   interrupt_requested_for: 'Interruption demandee pour {turnId}',
+  stale_turn_retired: 'Le tour amont avait deja disparu. Etat local bloque nettoye.',
   unknown_command: 'Commande inconnue : /{name}',
   command_not_supported: 'Ce bot ne prend pas en charge /{name}.',
   unsupported_action: 'Action non prise en charge',
@@ -1468,6 +1471,7 @@ export function getTelegramCommands(
       ...(includeRestart ? [{ command: 'restart', description: t(locale, 'cmd_desc_restart') }] : []),
       { command: 'queue', description: t(locale, 'cmd_desc_queue') },
       { command: 'where', description: t(locale, 'cmd_desc_where') },
+      { command: 'stop', description: t(locale, 'cmd_desc_interrupt') },
       { command: 'interrupt', description: t(locale, 'cmd_desc_interrupt') },
     ];
   }
@@ -1484,6 +1488,7 @@ export function getTelegramCommands(
       { command: 'queue', description: t(locale, 'cmd_desc_queue') },
       { command: 'permissions', description: t(locale, 'cmd_desc_permissions') },
       { command: 'where', description: t(locale, 'cmd_desc_where') },
+      { command: 'stop', description: t(locale, 'cmd_desc_interrupt') },
       { command: 'interrupt', description: t(locale, 'cmd_desc_interrupt') },
     ];
   }
@@ -1501,6 +1506,7 @@ export function getTelegramCommands(
       { command: 'queue', description: t(locale, 'cmd_desc_queue') },
       { command: 'permissions', description: t(locale, 'cmd_desc_permissions') },
       { command: 'where', description: t(locale, 'cmd_desc_where') },
+      { command: 'stop', description: t(locale, 'cmd_desc_interrupt') },
       { command: 'interrupt', description: t(locale, 'cmd_desc_interrupt') },
     ];
   }
@@ -1525,6 +1531,7 @@ export function getTelegramCommands(
     { command: 'permissions', description: t(locale, 'cmd_desc_permissions') },
     { command: 'reveal', description: t(locale, 'cmd_desc_reveal') },
     { command: 'where', description: t(locale, 'cmd_desc_where') },
+    { command: 'stop', description: t(locale, 'cmd_desc_interrupt') },
     { command: 'interrupt', description: t(locale, 'cmd_desc_interrupt') },
   ];
 }

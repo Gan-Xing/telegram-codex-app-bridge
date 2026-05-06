@@ -247,7 +247,10 @@ export class TurnExecutionCoordinator {
     await this.host.messages.sendMessage(active.scopeId, t(this.host.localeForChat(active.scopeId), 'plan_draft_execution_blocked'));
     if (!active.interruptRequested) {
       try {
-        await this.requestInterrupt(active);
+        const result = await this.requestInterrupt(active);
+        if (result === 'stale') {
+          await this.retireStaleTurn(active, new Error('no active turn to interrupt'));
+        }
       } catch (error) {
         this.host.logger.warn('guided_plan.draft_interrupt_failed', {
           turnId: active.turnId,
@@ -271,8 +274,13 @@ export class TurnExecutionCoordinator {
     }
     active.interruptRequested = true;
     try {
-      await this.requestInterrupt(active);
-      await this.host.answerCallback(event.callbackQueryId, t(locale, 'interrupt_requested'));
+      const result = await this.requestInterrupt(active);
+      if (result === 'stale') {
+        await this.host.answerCallback(event.callbackQueryId, t(locale, 'stale_turn_retired'));
+        await this.retireStaleTurn(active, new Error('no active turn to interrupt'));
+      } else {
+        await this.host.answerCallback(event.callbackQueryId, t(locale, 'interrupt_requested'));
+      }
     } catch (error) {
       await this.host.answerCallback(event.callbackQueryId, t(locale, 'interrupt_failed', { error: formatUserError(error) }));
     }
@@ -284,7 +292,12 @@ export class TurnExecutionCoordinator {
       await this.host.messages.sendMessage(scopeId, t(locale, 'no_active_turn'));
       return false;
     }
-    await this.requestInterrupt(active);
+    const result = await this.requestInterrupt(active);
+    if (result === 'stale') {
+      await this.host.messages.sendMessage(scopeId, t(locale, 'stale_turn_retired'));
+      await this.retireStaleTurn(active, new Error('no active turn to interrupt'));
+      return true;
+    }
     await this.host.messages.sendMessage(scopeId, t(locale, 'interrupt_requested_for', { turnId: active.turnId }));
     return true;
   }
@@ -333,16 +346,41 @@ export class TurnExecutionCoordinator {
     return this.host.turnRendering.findStreamingSegment(active);
   }
 
-  private async requestInterrupt(active: ActiveTurn): Promise<void> {
+  private async requestInterrupt(active: ActiveTurn): Promise<'requested' | 'stale'> {
     active.interruptRequested = true;
     try {
       await this.host.app.interruptTurn(active.threadId, active.turnId, active.scopeId);
       await this.host.turnRendering.queueRender(active, { forceStatus: true, forceStream: true });
+      return 'requested';
     } catch (error) {
+      if (isNoActiveTurnToInterruptError(error)) {
+        return 'stale';
+      }
       active.interruptRequested = false;
       throw error;
     }
   }
+
+  private async retireStaleTurn(active: ActiveTurn, error: unknown): Promise<void> {
+    if (!this.host.turns.has(active.turnId)) {
+      return;
+    }
+    active.interruptRequested = true;
+    active.completionState = 'interrupted';
+    active.completionStatusText = 'stale upstream turn';
+    active.completionErrorText = formatUserError(error);
+    this.host.logger.warn('turn.stale_interrupt_retired', {
+      scopeId: active.scopeId,
+      threadId: active.threadId,
+      turnId: active.turnId,
+      error: formatUserError(error),
+    });
+    await this.host.turnLifecycle.handleTurnCompleted(active);
+  }
+}
+
+function isNoActiveTurnToInterruptError(error: unknown): boolean {
+  return /no active turn to interrupt/i.test(formatUserError(error));
 }
 
 function parseReviewCommandArgs(args: string[]): {
