@@ -5,7 +5,6 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   extractCodexTokenIdentity,
-  readCodexAccountIdentity,
   readCodexAuthState,
   resolveCodexAuthPath,
   writeCodexAuthFile,
@@ -586,11 +585,15 @@ export class CodexAccountManager {
     });
     try {
       await fs.promises.chmod(tempPath, 0o600);
-    } catch {}
+    } catch {
+      // Best-effort permission hardening.
+    }
     await fs.promises.rename(tempPath, this.poolPath);
     try {
       await fs.promises.chmod(this.poolPath, 0o600);
-    } catch {}
+    } catch {
+      // Best-effort permission hardening.
+    }
   }
 
   async synchronizePoolWithHostAuth(pool: PersistedAccountPool): Promise<PersistedAccountPool> {

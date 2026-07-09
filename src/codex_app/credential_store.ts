@@ -228,7 +228,9 @@ export class EncryptedFileCodexCredentialStore implements CodexCredentialStore {
     await fs.promises.writeFile(saltPath, salt, { mode: 0o600 });
     try {
       await fs.promises.chmod(saltPath, 0o600);
-    } catch {}
+    } catch {
+      // Best-effort permission hardening.
+    }
     return salt;
   }
 
@@ -253,7 +255,9 @@ export class EncryptedFileCodexCredentialStore implements CodexCredentialStore {
         if (value) {
           return value;
         }
-      } catch {}
+      } catch {
+        // Try the next platform-specific machine id path.
+      }
     }
     return '';
   }
@@ -329,11 +333,15 @@ async function writeTextAtomic(filePath: string, text: string): Promise<void> {
   await fs.promises.writeFile(tempPath, text, { encoding: 'utf8', mode: 0o600 });
   try {
     await fs.promises.chmod(tempPath, 0o600);
-  } catch {}
+  } catch {
+    // Best-effort permission hardening.
+  }
   await fs.promises.rename(tempPath, filePath);
   try {
     await fs.promises.chmod(filePath, 0o600);
-  } catch {}
+  } catch {
+    // Best-effort permission hardening.
+  }
 }
 
 function normalizeString(value: unknown): string | null {

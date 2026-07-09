@@ -287,11 +287,15 @@ async function writeJsonAtomic(filePath: string, value: Record<string, unknown>)
   });
   try {
     await fs.promises.chmod(tempPath, 0o600);
-  } catch {}
+  } catch {
+    // Best-effort permission hardening.
+  }
   await fs.promises.rename(tempPath, filePath);
   try {
     await fs.promises.chmod(filePath, 0o600);
-  } catch {}
+  } catch {
+    // Best-effort permission hardening.
+  }
 }
 
 function normalizeString(value: unknown): string | null {
