@@ -70,8 +70,13 @@ interface ClaudeActiveTurn {
 
 const DEFAULT_CLAUDE_MODEL_CATALOG = [
   'sonnet',
+  'best',
+  'fable',
   'opus',
   'haiku',
+  'sonnet[1m]',
+  'opus[1m]',
+  'opusplan',
 ] as const;
 
 const CLAUDE_STREAM_CHUNK_SIZE = 160;
